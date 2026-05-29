@@ -289,6 +289,14 @@ msgstr "刚才"
 msgid "LOGGED OUT"
 msgstr "已登出"
 
+#: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:310
+msgid "Direct Connection"
+msgstr "直接连接"
+
+#: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:310
+msgid "Legend"
+msgstr "图例"
+
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:269
 msgid "Last Seen"
 msgstr "上次在线"
@@ -322,6 +330,10 @@ msgstr "MagicDNS:Tailscale将根据设置覆写系统resolv.conf配置"
 msgid "N/A"
 msgstr "不可用"
 
+#: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:700
+msgid "Network Topology"
+msgstr "网络拓扑"
+
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:218
 msgid "NOT RUNNING"
 msgstr "未运行"
@@ -345,6 +357,10 @@ msgstr "操作系统"
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:288
 msgid "Offline"
 msgstr "离线"
+
+#: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:310
+msgid "Relay Connection"
+msgstr "中继连接"
 
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:288
 msgid "Online"

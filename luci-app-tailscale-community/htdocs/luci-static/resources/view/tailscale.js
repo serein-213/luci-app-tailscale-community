@@ -307,6 +307,124 @@ function renderDevices(status) {
 	]);
 }
 
+// Render network topology diagram
+function renderTopology(status) {
+	if (!status || !status.hasOwnProperty('status') || status.status != 'running') {
+		return E('em', {}, _('Tailscale status error'));
+	}
+
+	const peers = status.peers;
+	if (!peers || Object.keys(peers).length === 0) {
+		return E('p', {}, _('No peer devices found.'));
+	}
+
+	const selfIp = status.ipv4 || '100.64.0.1';
+	const selfHostname = 'localhost';
+	const peerEntries = Object.entries(peers);
+	const nodeCount = peerEntries.length + 1;
+
+	// SVG dimensions
+	const width = 700;
+	const height = Math.max(400, Math.min(600, nodeCount * 50));
+	const centerX = width / 2;
+	const centerY = height / 2;
+	const radius = Math.min(width, height) / 2 - 80;
+
+	// OS icon mapping
+	const osIcons = {
+		'linux': '🐧',
+		'windows': '🪟',
+		'macos': '🍎',
+		'ios': '📱',
+		'android': '🤖',
+		'freebsd': '😈',
+		'default': '💻'
+	};
+
+	function getOsIcon(osType) {
+		if (!osType) return osIcons.default;
+		const os = osType.toLowerCase();
+		if (os.includes('linux')) return osIcons.linux;
+		if (os.includes('windows')) return osIcons.windows;
+		if (os.includes('macos') || os.includes('darwin')) return osIcons.macos;
+		if (os.includes('ios')) return osIcons.ios;
+		if (os.includes('android')) return osIcons.android;
+		if (os.includes('freebsd')) return osIcons.freebsd;
+		return osIcons.default;
+	}
+
+	// Build SVG elements
+	let svgLines = '';
+	let svgNodes = '';
+
+	// Add self node at center
+	svgNodes += `
+		<circle cx="${centerX}" cy="${centerY}" r="30" fill="#4CAF50" stroke="#2E7D32" stroke-width="3"/>
+		<text x="${centerX}" y="${centerY - 5}" text-anchor="middle" fill="white" font-size="20">🏠</text>
+		<text x="${centerX}" y="${centerY + 20}" text-anchor="middle" fill="white" font-size="10" font-weight="bold">Router</text>
+		<text x="${centerX}" y="${centerY + 35}" text-anchor="middle" fill="#333" font-size="9">${selfIp}</text>
+	`;
+
+	// Add peer nodes in circle
+	peerEntries.forEach(([peerid, peer], index) => {
+		const angle = (2 * Math.PI * index) / peerEntries.length - Math.PI / 2;
+		const x = centerX + radius * Math.cos(angle);
+		const y = centerY + radius * Math.sin(angle);
+
+		const isOnline = peer.online;
+		const isDirect = peer.linkadress && !peer.linkadress.includes('relay') && !peer.linkadress.includes('DERP');
+		const nodeColor = isOnline ? (isDirect ? '#2196F3' : '#FF9800') : '#9E9E9E';
+		const strokeColor = isOnline ? (isDirect ? '#1565C0' : '#E65100') : '#616161';
+		const lineColor = isOnline ? (isDirect ? '#4CAF50' : '#FF9800') : '#BDBDBD';
+		const lineStyle = isOnline ? (isDirect ? '' : 'stroke-dasharray="5,5"') : 'stroke-dasharray="3,3"';
+
+		// Draw connection line
+		svgLines += `<line x1="${centerX}" y1="${centerY}" x2="${x}" y2="${y}" 
+			stroke="${lineColor}" stroke-width="2" ${lineStyle} opacity="0.6"/>`;
+
+		// Draw node
+		const icon = getOsIcon(peer.ostype);
+		const hostname = peer.hostname || 'Unknown';
+		const ip = peer.ip ? peer.ip.split('<br')[0] : 'N/A';
+
+		svgNodes += `
+			<circle cx="${x}" cy="${y}" r="25" fill="${nodeColor}" stroke="${strokeColor}" stroke-width="2"/>
+			<text x="${x}" y="${y - 3}" text-anchor="middle" fill="white" font-size="16">${icon}</text>
+			<text x="${x}" y="${y + 15}" text-anchor="middle" fill="white" font-size="8" font-weight="bold">${hostname.substring(0, 10)}</text>
+			<text x="${x}" y="${y + 50}" text-anchor="middle" fill="#333" font-size="9">${ip}</text>
+		`;
+
+		// Add exit node indicator
+		if (peer.exit_node_option) {
+			svgNodes += `<text x="${x + 20}" y="${y - 15}" fill="#E91E63" font-size="12">⚡</text>`;
+		}
+	});
+
+	// Build legend
+	const legend = `
+		<div style="margin-top: 15px; padding: 10px; background: #f5f5f5; border-radius: 5px; font-size: 12px;">
+			<strong>${_('Legend')}:</strong>
+			<span style="margin-left: 15px;">🟢 ${_('Direct Connection')}</span>
+			<span style="margin-left: 15px;">🟡 ${_('Relay Connection')}</span>
+			<span style="margin-left: 15px;">⚪ ${_('Offline')}</span>
+			<span style="margin-left: 15px;">⚡ ${_('Exit Node')}</span>
+		</div>
+	`;
+
+	const svg = `
+		<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" 
+			style="background: white; border: 1px solid #ddd; border-radius: 8px; max-width: 100%;">
+			${svgLines}
+			${svgNodes}
+		</svg>
+	`;
+
+	return E('div', {}, [
+		E('div', { 'style': 'overflow-x: auto;' }, E('div', { 'innerHTML': svg })),
+		E('div', { 'innerHTML': legend })
+	]);
+}
+
 return view.extend({
 	load() {
 		return Promise.all([
@@ -580,6 +698,12 @@ return view.extend({
 		const devicesSection = s.taboption('devices', form.DummyValue, '_devices');
 		devicesSection.render = function () {
 			return E('div', { 'id': 'tailscale_devices_display', 'class': 'cbi-value' }, renderDevices(status));
+		};
+
+		s.tab('topology', _('Network Topology'));
+		const topologySection = s.taboption('topology', form.DummyValue, '_topology');
+		topologySection.render = function () {
+			return E('div', { 'id': 'tailscale_topology_display', 'class': 'cbi-value' }, renderTopology(status));
 		};
 
 		// Create the "Daemon Settings" tab and apply daemonConf

@@ -289,6 +289,14 @@ msgstr "剛才"
 msgid "LOGGED OUT"
 msgstr "已登出"
 
+#: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:310
+msgid "Direct Connection"
+msgstr "直接連線"
+
+#: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:310
+msgid "Legend"
+msgstr "圖例"
+
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:269
 msgid "Last Seen"
 msgstr "上次線上"
@@ -322,6 +330,10 @@ msgstr ""
 msgid "N/A"
 msgstr "N/A"
 
+#: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:700
+msgid "Network Topology"
+msgstr "網路拓撲"
+
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:218
 msgid "NOT RUNNING"
 msgstr "未執行"
@@ -345,6 +357,10 @@ msgstr "作業系統"
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:288
 msgid "Offline"
 msgstr "離線"
+
+#: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:310
+msgid "Relay Connection"
+msgstr "中繼連線"
 
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:288
 msgid "Online"
