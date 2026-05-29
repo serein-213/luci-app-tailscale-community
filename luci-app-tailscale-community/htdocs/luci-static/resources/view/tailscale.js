@@ -319,7 +319,6 @@ function renderTopology(status) {
 	}
 
 	const selfIp = status.ipv4 || '100.64.0.1';
-	const selfHostname = 'localhost';
 	const peerEntries = Object.entries(peers);
 	const nodeCount = peerEntries.length + 1;
 
@@ -337,7 +336,6 @@ function renderTopology(status) {
 		'macos': '🍎',
 		'ios': '📱',
 		'android': '🤖',
-		'freebsd': '😈',
 		'default': '💻'
 	};
 
@@ -349,80 +347,154 @@ function renderTopology(status) {
 		if (os.includes('macos') || os.includes('darwin')) return osIcons.macos;
 		if (os.includes('ios')) return osIcons.ios;
 		if (os.includes('android')) return osIcons.android;
-		if (os.includes('freebsd')) return osIcons.freebsd;
 		return osIcons.default;
 	}
 
-	// Build SVG elements
-	let svgLines = '';
-	let svgNodes = '';
+	// Build nodes array for rendering
+	const nodes = [];
+	const links = [];
 
-	// Add self node at center
-	svgNodes += `
-		<circle cx="${centerX}" cy="${centerY}" r="30" fill="#4CAF50" stroke="#2E7D32" stroke-width="3"/>
-		<text x="${centerX}" y="${centerY - 5}" text-anchor="middle" fill="white" font-size="20">🏠</text>
-		<text x="${centerX}" y="${centerY + 20}" text-anchor="middle" fill="white" font-size="10" font-weight="bold">Router</text>
-		<text x="${centerX}" y="${centerY + 35}" text-anchor="middle" fill="#333" font-size="9">${selfIp}</text>
-	`;
+	// Add self node
+	nodes.push({
+		x: centerX,
+		y: centerY,
+		r: 30,
+		fill: '#4CAF50',
+		stroke: '#2E7D32',
+		icon: '🏠',
+		label: 'Router',
+		ip: selfIp
+	});
 
-	// Add peer nodes in circle
+	// Add peer nodes
 	peerEntries.forEach(([peerid, peer], index) => {
 		const angle = (2 * Math.PI * index) / peerEntries.length - Math.PI / 2;
 		const x = centerX + radius * Math.cos(angle);
 		const y = centerY + radius * Math.sin(angle);
 
 		const isOnline = peer.online;
-		const isDirect = peer.linkadress && !peer.linkadress.includes('relay') && !peer.linkadress.includes('DERP');
+		const isDirect = peer.linkadress && !String(peer.linkadress).includes('relay') && !String(peer.linkadress).includes('DERP');
 		const nodeColor = isOnline ? (isDirect ? '#2196F3' : '#FF9800') : '#9E9E9E';
 		const strokeColor = isOnline ? (isDirect ? '#1565C0' : '#E65100') : '#616161';
 		const lineColor = isOnline ? (isDirect ? '#4CAF50' : '#FF9800') : '#BDBDBD';
-		const lineStyle = isOnline ? (isDirect ? '' : 'stroke-dasharray="5,5"') : 'stroke-dasharray="3,3"';
+		const lineDash = isOnline ? (isDirect ? '' : '5,5') : '3,3';
 
-		// Draw connection line
-		svgLines += `<line x1="${centerX}" y1="${centerY}" x2="${x}" y2="${y}" 
-			stroke="${lineColor}" stroke-width="2" ${lineStyle} opacity="0.6"/>`;
+		// Add link
+		links.push({
+			x1: centerX, y1: centerY,
+			x2: x, y2: y,
+			color: lineColor,
+			dash: lineDash
+		});
 
-		// Draw node
+		// Add node
 		const icon = getOsIcon(peer.ostype);
 		const hostname = peer.hostname || 'Unknown';
-		const ip = peer.ip ? peer.ip.split('<br')[0] : 'N/A';
+		const ip = peer.ip ? String(peer.ip).split('<br')[0] : 'N/A';
 
-		svgNodes += `
-			<circle cx="${x}" cy="${y}" r="25" fill="${nodeColor}" stroke="${strokeColor}" stroke-width="2"/>
-			<text x="${x}" y="${y - 3}" text-anchor="middle" fill="white" font-size="16">${icon}</text>
-			<text x="${x}" y="${y + 15}" text-anchor="middle" fill="white" font-size="8" font-weight="bold">${hostname.substring(0, 10)}</text>
-			<text x="${x}" y="${y + 50}" text-anchor="middle" fill="#333" font-size="9">${ip}</text>
-		`;
-
-		// Add exit node indicator
-		if (peer.exit_node_option) {
-			svgNodes += `<text x="${x + 20}" y="${y - 15}" fill="#E91E63" font-size="12">⚡</text>`;
-		}
+		nodes.push({
+			x: x,
+			y: y,
+			r: 25,
+			fill: nodeColor,
+			stroke: strokeColor,
+			icon: icon,
+			label: hostname.substring(0, 10),
+			ip: ip,
+			isExit: peer.exit_node_option
+		});
 	});
 
+	// Create container
+	const container = E('div', { 
+		'style': 'background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px; overflow-x: auto;'
+	});
+
+	// Create canvas for topology
+	const canvas = E('canvas', {
+		'id': 'topology-canvas',
+		'width': width,
+		'height': height,
+		'style': 'display: block; margin: 0 auto;'
+	});
+	container.appendChild(canvas);
+
+	// Draw on canvas
+	setTimeout(() => {
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return;
+
+		// Clear canvas
+		ctx.fillStyle = 'white';
+		ctx.fillRect(0, 0, width, height);
+
+		// Draw links
+		links.forEach(link => {
+			ctx.beginPath();
+			ctx.strokeStyle = link.color;
+			ctx.lineWidth = 2;
+			ctx.globalAlpha = 0.6;
+			if (link.dash) {
+				ctx.setLineDash(link.dash.split(',').map(Number));
+			} else {
+				ctx.setLineDash([]);
+			}
+			ctx.moveTo(link.x1, link.y1);
+			ctx.lineTo(link.x2, link.y2);
+			ctx.stroke();
+			ctx.setLineDash([]);
+			ctx.globalAlpha = 1;
+		});
+
+		// Draw nodes
+		nodes.forEach(node => {
+			// Draw circle
+			ctx.beginPath();
+			ctx.arc(node.x, node.y, node.r, 0, Math.PI * 2);
+			ctx.fillStyle = node.fill;
+			ctx.fill();
+			ctx.strokeStyle = node.stroke;
+			ctx.lineWidth = 2;
+			ctx.stroke();
+
+			// Draw icon
+			ctx.font = '16px Arial';
+			ctx.textAlign = 'center';
+			ctx.textBaseline = 'middle';
+			ctx.fillStyle = 'white';
+			ctx.fillText(node.icon, node.x, node.y - 3);
+
+			// Draw label
+			ctx.font = 'bold 9px Arial';
+			ctx.fillStyle = 'white';
+			ctx.fillText(node.label, node.x, node.y + 15);
+
+			// Draw IP
+			ctx.font = '9px Arial';
+			ctx.fillStyle = '#333';
+			ctx.fillText(node.ip, node.x, node.y + 45);
+
+			// Draw exit node indicator
+			if (node.isExit) {
+				ctx.font = '12px Arial';
+				ctx.fillStyle = '#E91E63';
+				ctx.fillText('⚡', node.x + 20, node.y - 15);
+			}
+		});
+	}, 100);
+
 	// Build legend
-	const legend = `
-		<div style="margin-top: 15px; padding: 10px; background: #f5f5f5; border-radius: 5px; font-size: 12px;">
-			<strong>${_('Legend')}:</strong>
-			<span style="margin-left: 15px;">🟢 ${_('Direct Connection')}</span>
-			<span style="margin-left: 15px;">🟡 ${_('Relay Connection')}</span>
-			<span style="margin-left: 15px;">⚪ ${_('Offline')}</span>
-			<span style="margin-left: 15px;">⚡ ${_('Exit Node')}</span>
-		</div>
-	`;
-
-	const svg = `
-		<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" 
-			style="background: white; border: 1px solid #ddd; border-radius: 8px; max-width: 100%;">
-			${svgLines}
-			${svgNodes}
-		</svg>
-	`;
-
-	return E('div', {}, [
-		E('div', { 'style': 'overflow-x: auto;' }, E('div', { 'innerHTML': svg })),
-		E('div', { 'innerHTML': legend })
+	const legend = E('div', {
+		'style': 'margin-top: 15px; padding: 10px; background: #f5f5f5; border-radius: 5px; font-size: 12px;'
+	}, [
+		E('strong', {}, _('Legend') + ':'),
+		E('span', { 'style': 'margin-left: 15px;' }, '🟢 ' + _('Direct Connection')),
+		E('span', { 'style': 'margin-left: 15px;' }, '🟡 ' + _('Relay Connection')),
+		E('span', { 'style': 'margin-left: 15px;' }, '⚪ ' + _('Offline')),
+		E('span', { 'style': 'margin-left: 15px;' }, '⚡ ' + _('Exit Node'))
 	]);
+
+	return E('div', {}, [container, legend]);
 }
 
 return view.extend({
