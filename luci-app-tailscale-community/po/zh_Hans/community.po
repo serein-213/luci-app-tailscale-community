@@ -289,6 +289,10 @@ msgstr "刚才"
 msgid "LOGGED OUT"
 msgstr "已登出"
 
+#: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js
+msgid "Logs"
+msgstr "日志"
+
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:310
 msgid "Direct Connection"
 msgstr "直接连接"
@@ -330,6 +334,10 @@ msgstr "MagicDNS:Tailscale将根据设置覆写系统resolv.conf配置"
 msgid "N/A"
 msgstr "不可用"
 
+#: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js
+msgid "Network Tools"
+msgstr "网络工具"
+
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:700
 msgid "Network Topology"
 msgstr "网络拓扑"
@@ -337,6 +345,10 @@ msgstr "网络拓扑"
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:218
 msgid "NOT RUNNING"
 msgstr "未运行"
+
+#: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js
+msgid "No logs available"
+msgstr "无可用日志"
 
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:258
 msgid "No peer devices found."
