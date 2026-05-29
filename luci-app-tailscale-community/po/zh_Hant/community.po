@@ -442,6 +442,12 @@ msgstr "登出成功。"
 msgid "TAILSCALE NOT FOUND"
 msgstr "未找到 TAILSCALE"
 
+#: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:201
+msgid ""
+"Tailscale is not installed. You can install it using one of the following "
+"methods:"
+msgstr "Tailscale 未安裝。您可以使用以下方式之一進行安裝："
+
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:228
 msgid "TUN Mode"
 msgstr "TUN 模式"
