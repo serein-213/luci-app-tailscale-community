@@ -322,7 +322,7 @@ function renderTopology(status) {
 	const peerEntries = Object.entries(peers);
 	const nodeCount = peerEntries.length + 1;
 
-	// SVG dimensions
+	// Canvas dimensions
 	const width = 700;
 	const height = Math.max(400, Math.min(600, nodeCount * 50));
 	const centerX = width / 2;
@@ -350,12 +350,13 @@ function renderTopology(status) {
 		return osIcons.default;
 	}
 
-	// Build nodes array for rendering
+	// Build nodes array
 	const nodes = [];
 	const links = [];
 
-	// Add self node
+	// Add self node (center)
 	nodes.push({
+		id: 'self',
 		x: centerX,
 		y: centerY,
 		r: 30,
@@ -363,7 +364,8 @@ function renderTopology(status) {
 		stroke: '#2E7D32',
 		icon: '🏠',
 		label: 'Router',
-		ip: selfIp
+		ip: selfIp,
+		draggable: false
 	});
 
 	// Add peer nodes
@@ -377,84 +379,99 @@ function renderTopology(status) {
 		const nodeColor = isOnline ? (isDirect ? '#2196F3' : '#FF9800') : '#9E9E9E';
 		const strokeColor = isOnline ? (isDirect ? '#1565C0' : '#E65100') : '#616161';
 		const lineColor = isOnline ? (isDirect ? '#4CAF50' : '#FF9800') : '#BDBDBD';
-		const lineDash = isOnline ? (isDirect ? '' : '5,5') : '3,3';
+		const lineDash = isOnline ? (isDirect ? [] : [5, 5]) : [3, 3];
 
 		// Add link
 		links.push({
-			x1: centerX, y1: centerY,
-			x2: x, y2: y,
+			source: 0,
+			target: nodes.length,
 			color: lineColor,
 			dash: lineDash
 		});
 
 		// Add node
-		const icon = getOsIcon(peer.ostype);
-		const hostname = peer.hostname || 'Unknown';
-		const ip = peer.ip ? String(peer.ip).split('<br')[0] : 'N/A';
-
 		nodes.push({
+			id: peerid,
 			x: x,
 			y: y,
 			r: 25,
 			fill: nodeColor,
 			stroke: strokeColor,
-			icon: icon,
-			label: hostname.substring(0, 10),
-			ip: ip,
-			isExit: peer.exit_node_option
+			icon: getOsIcon(peer.ostype),
+			label: (peer.hostname || 'Unknown').substring(0, 10),
+			ip: peer.ip ? String(peer.ip).split('<br')[0] : 'N/A',
+			isExit: peer.exit_node_option,
+			draggable: true
 		});
 	});
 
-	// Create container
-	const container = E('div', { 
-		'style': 'background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px; overflow-x: auto;'
-	});
-
-	// Create canvas for topology
+	// Create canvas container
 	const canvas = E('canvas', {
-		'id': 'topology-canvas',
 		'width': width,
 		'height': height,
-		'style': 'display: block; margin: 0 auto;'
+		'style': 'cursor: grab; border-radius: 8px;'
 	});
-	container.appendChild(canvas);
 
-	// Draw on canvas
-	setTimeout(() => {
+	// Tooltip element
+	const tooltip = E('div', {
+		'style': 'position: absolute; display: none; background: rgba(0,0,0,0.8); color: white; padding: 8px 12px; border-radius: 4px; font-size: 12px; pointer-events: none; z-index: 1000;'
+	});
+
+	// State for dragging
+	let dragNode = null;
+	let dragOffsetX = 0;
+	let dragOffsetY = 0;
+	let hoveredNode = null;
+
+	// Draw function
+	function draw() {
 		const ctx = canvas.getContext('2d');
 		if (!ctx) return;
 
-		// Clear canvas
-		ctx.fillStyle = 'white';
-		ctx.fillRect(0, 0, width, height);
+		// Clear canvas with transparent background
+		ctx.clearRect(0, 0, width, height);
+
+		// Draw grid pattern for visual reference
+		ctx.strokeStyle = '#f0f0f0';
+		ctx.lineWidth = 0.5;
+		for (let x = 0; x < width; x += 50) {
+			ctx.beginPath();
+			ctx.moveTo(x, 0);
+			ctx.lineTo(x, height);
+			ctx.stroke();
+		}
+		for (let y = 0; y < height; y += 50) {
+			ctx.beginPath();
+			ctx.moveTo(0, y);
+			ctx.lineTo(width, y);
+			ctx.stroke();
+		}
 
 		// Draw links
 		links.forEach(link => {
+			const source = nodes[link.source];
+			const target = nodes[link.target];
 			ctx.beginPath();
 			ctx.strokeStyle = link.color;
 			ctx.lineWidth = 2;
 			ctx.globalAlpha = 0.6;
-			if (link.dash) {
-				ctx.setLineDash(link.dash.split(',').map(Number));
-			} else {
-				ctx.setLineDash([]);
-			}
-			ctx.moveTo(link.x1, link.y1);
-			ctx.lineTo(link.x2, link.y2);
+			ctx.setLineDash(link.dash);
+			ctx.moveTo(source.x, source.y);
+			ctx.lineTo(target.x, target.y);
 			ctx.stroke();
 			ctx.setLineDash([]);
 			ctx.globalAlpha = 1;
 		});
 
 		// Draw nodes
-		nodes.forEach(node => {
+		nodes.forEach((node, index) => {
 			// Draw circle
 			ctx.beginPath();
 			ctx.arc(node.x, node.y, node.r, 0, Math.PI * 2);
 			ctx.fillStyle = node.fill;
 			ctx.fill();
 			ctx.strokeStyle = node.stroke;
-			ctx.lineWidth = 2;
+			ctx.lineWidth = node === hoveredNode ? 4 : 2;
 			ctx.stroke();
 
 			// Draw icon
@@ -469,10 +486,10 @@ function renderTopology(status) {
 			ctx.fillStyle = 'white';
 			ctx.fillText(node.label, node.x, node.y + 15);
 
-			// Draw IP
+			// Draw IP below node
 			ctx.font = '9px Arial';
-			ctx.fillStyle = '#333';
-			ctx.fillText(node.ip, node.x, node.y + 45);
+			ctx.fillStyle = '#555';
+			ctx.fillText(node.ip, node.x, node.y + node.r + 15);
 
 			// Draw exit node indicator
 			if (node.isExit) {
@@ -481,7 +498,80 @@ function renderTopology(status) {
 				ctx.fillText('⚡', node.x + 20, node.y - 15);
 			}
 		});
-	}, 100);
+	}
+
+	// Get node at position
+	function getNodeAt(x, y) {
+		for (let i = nodes.length - 1; i >= 0; i--) {
+			const node = nodes[i];
+			const dx = x - node.x;
+			const dy = y - node.y;
+			if (dx * dx + dy * dy <= node.r * node.r) {
+				return node;
+			}
+		}
+		return null;
+	}
+
+	// Mouse event handlers
+	canvas.addEventListener('mousedown', (e) => {
+		const rect = canvas.getBoundingClientRect();
+		const x = e.clientX - rect.left;
+		const y = e.clientY - rect.top;
+		const node = getNodeAt(x, y);
+		
+		if (node && node.draggable) {
+			dragNode = node;
+			dragOffsetX = x - node.x;
+			dragOffsetY = y - node.y;
+			canvas.style.cursor = 'grabbing';
+			e.preventDefault();
+		}
+	});
+
+	canvas.addEventListener('mousemove', (e) => {
+		const rect = canvas.getBoundingClientRect();
+		const x = e.clientX - rect.left;
+		const y = e.clientY - rect.top;
+
+		if (dragNode) {
+			dragNode.x = Math.max(dragNode.r, Math.min(width - dragNode.r, x - dragOffsetX));
+			dragNode.y = Math.max(dragNode.r, Math.min(height - dragNode.r, y - dragOffsetY));
+			draw();
+		} else {
+			const node = getNodeAt(x, y);
+			if (node !== hoveredNode) {
+				hoveredNode = node;
+				canvas.style.cursor = node ? (node.draggable ? 'grab' : 'pointer') : 'default';
+				draw();
+			}
+
+			// Update tooltip
+			if (node) {
+				tooltip.style.display = 'block';
+				tooltip.style.left = (e.clientX + 15) + 'px';
+				tooltip.style.top = (e.clientY + 15) + 'px';
+				tooltip.innerHTML = '<strong>' + node.label + '</strong><br>' + node.ip;
+			} else {
+				tooltip.style.display = 'none';
+			}
+		}
+	});
+
+	canvas.addEventListener('mouseup', () => {
+		dragNode = null;
+		canvas.style.cursor = hoveredNode ? 'grab' : 'default';
+	});
+
+	canvas.addEventListener('mouseleave', () => {
+		dragNode = null;
+		hoveredNode = null;
+		tooltip.style.display = 'none';
+		draw();
+	});
+
+	// Initial draw
+	draw();
 
 	// Build legend
 	const legend = E('div', {
@@ -494,7 +584,7 @@ function renderTopology(status) {
 		E('span', { 'style': 'margin-left: 15px;' }, '⚡ ' + _('Exit Node'))
 	]);
 
-	return E('div', {}, [container, legend]);
+	return E('div', { 'style': 'position: relative;' }, [canvas, tooltip, legend]);
 }
 
 return view.extend({
