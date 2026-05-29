@@ -353,60 +353,94 @@ function renderTopology(status) {
 		return osIcons.default;
 	}
 
-	// Build nodes array
-	const nodes = [];
-	const links = [];
+	// Calculate line width based on traffic
+	function getLineWidth(rx, tx) {
+		const totalTraffic = (parseInt(rx) || 0) + (parseInt(tx) || 0);
+		if (totalTraffic === 0) return 1;
+		if (totalTraffic < 1024) return 1;           // < 1KB
+		if (totalTraffic < 1024 * 1024) return 2;    // < 1MB
+		if (totalTraffic < 1024 * 1024 * 100) return 3; // < 100MB
+		return 4;                                     // >= 100MB
+	}
 
-	// Add self node (center)
-	nodes.push({
-		id: 'self',
-		x: centerX,
-		y: centerY,
-		r: 30,
-		fill: '#4CAF50',
-		stroke: '#2E7D32',
-		icon: '🏠',
-		label: 'Router',
-		ip: selfIp,
-		draggable: false
-	});
+	// Build nodes and links from current data
+	function buildGraphData(peersData) {
+		const nodes = [];
+		const links = [];
 
-	// Add peer nodes
-	peerEntries.forEach(([peerid, peer], index) => {
-		const angle = (2 * Math.PI * index) / peerEntries.length - Math.PI / 2;
-		const x = centerX + radius * Math.cos(angle);
-		const y = centerY + radius * Math.sin(angle);
-
-		const isOnline = peer.online;
-		const isDirect = peer.linkadress && !String(peer.linkadress).includes('relay') && !String(peer.linkadress).includes('DERP');
-		const nodeColor = isOnline ? (isDirect ? '#2196F3' : '#FF9800') : '#9E9E9E';
-		const strokeColor = isOnline ? (isDirect ? '#1565C0' : '#E65100') : '#616161';
-		const lineColor = isOnline ? (isDirect ? '#4CAF50' : '#FF9800') : '#BDBDBD';
-		const lineDash = isOnline ? (isDirect ? [] : [5, 5]) : [3, 3];
-
-		// Add link
-		links.push({
-			source: 0,
-			target: nodes.length,
-			color: lineColor,
-			dash: lineDash
-		});
-
-		// Add node
+		// Add self node (center)
 		nodes.push({
-			id: peerid,
-			x: x,
-			y: y,
-			r: 25,
-			fill: nodeColor,
-			stroke: strokeColor,
-			icon: getOsIcon(peer.ostype),
-			label: (peer.hostname || 'Unknown').substring(0, 10),
-			ip: peer.ip ? String(peer.ip).split('<br')[0] : 'N/A',
-			isExit: peer.exit_node_option,
-			draggable: true
+			id: 'self',
+			x: centerX,
+			y: centerY,
+			r: 30,
+			fill: '#4CAF50',
+			stroke: '#2E7D32',
+			icon: '🏠',
+			label: 'Router',
+			ip: selfIp,
+			draggable: false,
+			alpha: 1,
+			peerData: { hostname: 'Router', ip: selfIp, ostype: 'OpenWrt', online: true, rx: 0, tx: 0 }
 		});
-	});
+
+		// Add peer nodes
+		const entries = Object.entries(peersData);
+		entries.forEach(([peerid, peer], index) => {
+			const angle = (2 * Math.PI * index) / entries.length - Math.PI / 2;
+			const x = centerX + radius * Math.cos(angle);
+			const y = centerY + radius * Math.sin(angle);
+
+			const isOnline = peer.online;
+			const isDirect = peer.linkadress && !String(peer.linkadress).includes('relay') && !String(peer.linkadress).includes('DERP');
+			const nodeColor = isOnline ? (isDirect ? '#2196F3' : '#FF9800') : '#9E9E9E';
+			const strokeColor = isOnline ? (isDirect ? '#1565C0' : '#E65100') : '#616161';
+			const lineColor = isOnline ? (isDirect ? '#4CAF50' : '#FF9800') : '#BDBDBD';
+			const lineDash = isOnline ? (isDirect ? [] : [5, 5]) : [3, 3];
+
+			// Add link with traffic-based width
+			links.push({
+				source: 0,
+				target: nodes.length,
+				color: lineColor,
+				dash: lineDash,
+				width: getLineWidth(peer.rx, peer.tx)
+			});
+
+			// Add node with alpha for animation
+			nodes.push({
+				id: peerid,
+				x: x,
+				y: y,
+				r: 25,
+				fill: nodeColor,
+				stroke: strokeColor,
+				icon: getOsIcon(peer.ostype),
+				label: (peer.hostname || 'Unknown').substring(0, 10),
+				ip: peer.ip ? String(peer.ip).split('<br')[0] : 'N/A',
+				isExit: peer.exit_node_option,
+				draggable: true,
+				alpha: isOnline ? 1 : 0.6,
+				peerData: peer
+			});
+		});
+
+		return { nodes, links };
+	}
+
+	let { nodes, links } = buildGraphData(peers);
+	let prevOnlineState = {};
+	nodes.forEach(n => { prevOnlineState[n.id] = n.peerData.online; });
+
+	// Animation state for node transitions
+	let animationAlpha = {};
+	nodes.forEach(n => { animationAlpha[n.id] = n.alpha; });
+
+	// Transform state for zoom and pan
+	let transform = { x: 0, y: 0, scale: 1 };
+	let isPanning = false;
+	let panStartX = 0;
+	let panStartY = 0;
 
 	// Create canvas container
 	const canvas = E('canvas', {
@@ -420,11 +454,17 @@ function renderTopology(status) {
 		'style': 'position: absolute; display: none; background: rgba(0,0,0,0.8); color: white; padding: 8px 12px; border-radius: 4px; font-size: 12px; pointer-events: none; z-index: 1000;'
 	});
 
+	// Detail panel element
+	const detailPanel = E('div', {
+		'style': 'position: absolute; right: 10px; top: 10px; width: 250px; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 1001; font-size: 13px;'
+	});
+
 	// State for dragging
 	let dragNode = null;
 	let dragOffsetX = 0;
 	let dragOffsetY = 0;
 	let hoveredNode = null;
+	let selectedNode = null;
 
 	// Draw function
 	function draw() {
@@ -433,6 +473,11 @@ function renderTopology(status) {
 
 		// Clear canvas with transparent background
 		ctx.clearRect(0, 0, width, height);
+
+		// Apply transform
+		ctx.save();
+		ctx.translate(transform.x, transform.y);
+		ctx.scale(transform.scale, transform.scale);
 
 		// Draw grid pattern for visual reference
 		ctx.strokeStyle = '#f0f0f0';
@@ -456,7 +501,7 @@ function renderTopology(status) {
 			const target = nodes[link.target];
 			ctx.beginPath();
 			ctx.strokeStyle = link.color;
-			ctx.lineWidth = 2;
+			ctx.lineWidth = link.width;
 			ctx.globalAlpha = 0.6;
 			ctx.setLineDash(link.dash);
 			ctx.moveTo(source.x, source.y);
@@ -468,13 +513,16 @@ function renderTopology(status) {
 
 		// Draw nodes
 		nodes.forEach((node, index) => {
+			const alpha = animationAlpha[node.id] || 1;
+			ctx.globalAlpha = alpha;
+
 			// Draw circle
 			ctx.beginPath();
 			ctx.arc(node.x, node.y, node.r, 0, Math.PI * 2);
 			ctx.fillStyle = node.fill;
 			ctx.fill();
 			ctx.strokeStyle = node.stroke;
-			ctx.lineWidth = node === hoveredNode ? 4 : 2;
+			ctx.lineWidth = node === hoveredNode || node === selectedNode ? 4 : 2;
 			ctx.stroke();
 
 			// Draw icon
@@ -500,11 +548,19 @@ function renderTopology(status) {
 				ctx.fillStyle = '#E91E63';
 				ctx.fillText('⚡', node.x + 20, node.y - 15);
 			}
+
+			ctx.globalAlpha = 1;
 		});
+
+		ctx.restore();
 	}
 
-	// Get node at position
-	function getNodeAt(x, y) {
+	// Get node at position (accounting for transform)
+	function getNodeAt(canvasX, canvasY) {
+		// Convert canvas coordinates to world coordinates
+		const x = (canvasX - transform.x) / transform.scale;
+		const y = (canvasY - transform.y) / transform.scale;
+
 		for (let i = nodes.length - 1; i >= 0; i--) {
 			const node = nodes[i];
 			const dx = x - node.x;
@@ -516,7 +572,89 @@ function renderTopology(status) {
 		return null;
 	}
 
-	// Mouse event handlers
+	// Update detail panel
+	function updateDetailPanel(node) {
+		if (!node) {
+			detailPanel.style.display = 'none';
+			selectedNode = null;
+			return;
+		}
+
+		selectedNode = node;
+		const peer = node.peerData;
+		const isOnline = peer.online;
+		const isDirect = peer.linkadress && !String(peer.linkadress).includes('relay') && !String(peer.linkadress).includes('DERP');
+
+		const statusColor = isOnline ? 'green' : 'gray';
+		const statusText = isOnline ? _('Online') : _('Offline');
+		const connType = node.id === 'self' ? _('Local') : (isDirect ? _('Direct') : _('Relay'));
+		const connInfo = node.id === 'self' ? '-' : formatConnectionInfo(peer.linkadress || '-');
+
+		detailPanel.innerHTML = '';
+		detailPanel.appendChild(E('div', { 'style': 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;' }, [
+			E('strong', { 'style': 'font-size: 14px;' }, node.icon + ' ' + node.label),
+			E('button', {
+				'style': 'background: none; border: none; cursor: pointer; font-size: 16px; color: #999;',
+				'click': function() { updateDetailPanel(null); draw(); }
+			}, '×')
+		]));
+		detailPanel.appendChild(E('hr', { 'style': 'margin: 8px 0; border: none; border-top: 1px solid #eee;' }));
+		detailPanel.appendChild(E('div', {}, [
+			E('div', { 'style': 'margin-bottom: 6px;' }, [
+				E('span', { 'style': 'color: #666;' }, _('Status') + ': '),
+				E('span', { 'style': 'color: ' + statusColor + '; font-weight: bold;' }, statusText)
+			]),
+			E('div', { 'style': 'margin-bottom: 6px;' }, [
+				E('span', { 'style': 'color: #666;' }, _('IP') + ': '),
+				E('span', {}, node.ip)
+			]),
+			E('div', { 'style': 'margin-bottom: 6px;' }, [
+				E('span', { 'style': 'color: #666;' }, _('OS') + ': '),
+				E('span', {}, peer.ostype || 'N/A')
+			]),
+			E('div', { 'style': 'margin-bottom: 6px;' }, [
+				E('span', { 'style': 'color: #666;' }, _('Connection') + ': '),
+				E('span', {}, connType)
+			]),
+			E('div', { 'style': 'margin-bottom: 6px;' }, [
+				E('span', { 'style': 'color: #666;' }, _('Connection Info') + ': '),
+				E('span', {}, connInfo)
+			]),
+			E('div', { 'style': 'margin-bottom: 6px;' }, [
+				E('span', { 'style': 'color: #666;' }, _('RX') + ': '),
+				E('span', {}, formatBytes(peer.rx))
+			]),
+			E('div', { 'style': 'margin-bottom: 6px;' }, [
+				E('span', { 'style': 'color: #666;' }, _('TX') + ': '),
+				E('span', {}, formatBytes(peer.tx))
+			]),
+			E('div', {}, [
+				E('span', { 'style': 'color: #666;' }, _('Last Seen') + ': '),
+				E('span', {}, formatLastSeen(peer.lastseen))
+			])
+		]));
+
+		detailPanel.style.display = 'block';
+	}
+
+	// Mouse event handlers for zoom and pan
+	canvas.addEventListener('wheel', (e) => {
+		e.preventDefault();
+		const rect = canvas.getBoundingClientRect();
+		const mouseX = e.clientX - rect.left;
+		const mouseY = e.clientY - rect.top;
+
+		const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+		const newScale = Math.max(0.5, Math.min(3, transform.scale * zoomFactor));
+
+		// Zoom toward mouse position
+		transform.x = mouseX - (mouseX - transform.x) * (newScale / transform.scale);
+		transform.y = mouseY - (mouseY - transform.y) * (newScale / transform.scale);
+		transform.scale = newScale;
+
+		draw();
+	});
+
 	canvas.addEventListener('mousedown', (e) => {
 		const rect = canvas.getBoundingClientRect();
 		const x = e.clientX - rect.left;
@@ -525,8 +663,17 @@ function renderTopology(status) {
 		
 		if (node && node.draggable) {
 			dragNode = node;
-			dragOffsetX = x - node.x;
-			dragOffsetY = y - node.y;
+			const worldX = (x - transform.x) / transform.scale;
+			const worldY = (y - transform.y) / transform.scale;
+			dragOffsetX = worldX - node.x;
+			dragOffsetY = worldY - node.y;
+			canvas.style.cursor = 'grabbing';
+			e.preventDefault();
+		} else if (!node) {
+			// Start panning
+			isPanning = true;
+			panStartX = x - transform.x;
+			panStartY = y - transform.y;
 			canvas.style.cursor = 'grabbing';
 			e.preventDefault();
 		}
@@ -538,8 +685,14 @@ function renderTopology(status) {
 		const y = e.clientY - rect.top;
 
 		if (dragNode) {
-			dragNode.x = Math.max(dragNode.r, Math.min(width - dragNode.r, x - dragOffsetX));
-			dragNode.y = Math.max(dragNode.r, Math.min(height - dragNode.r, y - dragOffsetY));
+			const worldX = (x - transform.x) / transform.scale;
+			const worldY = (y - transform.y) / transform.scale;
+			dragNode.x = Math.max(dragNode.r, Math.min(width - dragNode.r, worldX - dragOffsetX));
+			dragNode.y = Math.max(dragNode.r, Math.min(height - dragNode.r, worldY - dragOffsetY));
+			draw();
+		} else if (isPanning) {
+			transform.x = x - panStartX;
+			transform.y = y - panStartY;
 			draw();
 		} else {
 			const node = getNodeAt(x, y);
@@ -561,13 +714,30 @@ function renderTopology(status) {
 		}
 	});
 
-	canvas.addEventListener('mouseup', () => {
-		dragNode = null;
-		canvas.style.cursor = hoveredNode ? 'grab' : 'default';
+	canvas.addEventListener('mouseup', (e) => {
+		const rect = canvas.getBoundingClientRect();
+		const x = e.clientX - rect.left;
+		const y = e.clientY - rect.top;
+
+		if (dragNode) {
+			dragNode = null;
+			canvas.style.cursor = hoveredNode ? 'grab' : 'default';
+		} else if (isPanning) {
+			isPanning = false;
+			canvas.style.cursor = 'default';
+		} else {
+			// Click on node to show detail panel
+			const node = getNodeAt(x, y);
+			if (node) {
+				updateDetailPanel(node);
+				draw();
+			}
+		}
 	});
 
 	canvas.addEventListener('mouseleave', () => {
 		dragNode = null;
+		isPanning = false;
 		hoveredNode = null;
 		tooltip.style.display = 'none';
 		draw();
@@ -576,18 +746,95 @@ function renderTopology(status) {
 	// Initial draw
 	draw();
 
+	// Real-time refresh every 10 seconds
+	let refreshTimer = setInterval(function() {
+		L.resolveDefault(callGetStatus(), {}).then(function(newStatus) {
+			if (newStatus && newStatus.status === 'running' && newStatus.peers) {
+				// Check for state changes and trigger animations
+				const newEntries = Object.entries(newStatus.peers);
+				newEntries.forEach(([peerid, peer]) => {
+					const wasOnline = prevOnlineState[peerid];
+					const isOnline = peer.online;
+					
+					if (wasOnline !== undefined && wasOnline !== isOnline) {
+						// State changed - trigger animation
+						animationAlpha[peerid] = 0.3;
+						setTimeout(function() {
+							animationAlpha[peerid] = isOnline ? 1 : 0.6;
+							draw();
+						}, 500);
+					}
+					prevOnlineState[peerid] = isOnline;
+				});
+
+				// Rebuild graph data
+				const newData = buildGraphData(newStatus.peers);
+				
+				// Preserve node positions for existing nodes
+				newData.nodes.forEach(newNode => {
+					const existingNode = nodes.find(n => n.id === newNode.id);
+					if (existingNode) {
+						newNode.x = existingNode.x;
+						newNode.y = existingNode.y;
+					}
+				});
+
+				nodes = newData.nodes;
+				links = newData.links;
+				draw();
+			}
+		});
+	}, 10000);
+
 	// Build legend
 	const legend = E('div', {
-		'style': 'margin-top: 15px; padding: 10px; background: #f5f5f5; border-radius: 5px; font-size: 12px;'
+		'style': 'margin-top: 15px; padding: 10px; background: #f5f5f5; border-radius: 5px; font-size: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;'
 	}, [
 		E('strong', {}, _('Legend') + ':'),
-		E('span', { 'style': 'margin-left: 15px;' }, '🟢 ' + _('Direct Connection')),
-		E('span', { 'style': 'margin-left: 15px;' }, '🟡 ' + _('Relay Connection')),
-		E('span', { 'style': 'margin-left: 15px;' }, '⚪ ' + _('Offline')),
-		E('span', { 'style': 'margin-left: 15px;' }, '⚡ ' + _('Exit Node'))
+		E('span', { 'style': 'margin-left: 5px;' }, '🟢 ' + _('Direct Connection')),
+		E('span', { 'style': 'margin-left: 5px;' }, '🟡 ' + _('Relay Connection')),
+		E('span', { 'style': 'margin-left: 5px;' }, '⚪ ' + _('Offline')),
+		E('span', { 'style': 'margin-left: 5px;' }, '⚡ ' + _('Exit Node')),
+		E('span', { 'style': 'margin-left: 15px; color: #666;' }, _('Scroll to zoom, drag to pan, click node for details'))
 	]);
 
-	return E('div', { 'style': 'position: relative;' }, [canvas, tooltip, legend]);
+	// Build toolbar
+	const toolbar = E('div', {
+		'style': 'margin-bottom: 10px; display: flex; gap: 8px;'
+	}, [
+		E('button', {
+			'class': 'cbi-button',
+			'style': 'font-size: 12px;',
+			'click': function() {
+				transform = { x: 0, y: 0, scale: 1 };
+				draw();
+			}
+		}, _('Reset View')),
+		E('button', {
+			'class': 'cbi-button',
+			'style': 'font-size: 12px;',
+			'click': function() {
+				transform.scale = Math.min(3, transform.scale * 1.2);
+				draw();
+			}
+		}, _('Zoom In')),
+		E('button', {
+			'class': 'cbi-button',
+			'style': 'font-size: 12px;',
+			'click': function() {
+				transform.scale = Math.max(0.5, transform.scale * 0.8);
+				draw();
+			}
+		}, _('Zoom Out'))
+	]);
+
+	// Cleanup on element removal
+	const container = E('div', { 'style': 'position: relative;' }, [toolbar, canvas, tooltip, detailPanel, legend]);
+	
+	// Store cleanup function
+	container._cleanupTimer = refreshTimer;
+	
+	return container;
 }
 
 // Load logs function
