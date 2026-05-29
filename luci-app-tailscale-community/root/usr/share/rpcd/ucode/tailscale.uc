@@ -7,15 +7,18 @@ import { cursor } from 'uci';
 
 const uci = cursor();
 
-function exec(command) {
+function exec(command, timeout) {
 	let stdout_content = '';
 	let p = popen(command, 'r');
-	sleep(100);
 	if (p == null) {
-		return { code: -1, stdout: '', stderr: `Failed to execute: ${command}` };
+		return { code: -1, stdout: [], stderr: `Failed to execute: ${command}` };
 	}
+
+	// Wait a bit for command to start
+	sleep(timeout || 100);
+
 	for (let line = p.read('line'); length(line); line = p.read('line')) {
-		stdout_content = stdout_content+line;
+		stdout_content = stdout_content + line;
 	}
 	stdout_content = rtrim(stdout_content);
 	stdout_content = split(stdout_content, '\n');
@@ -31,6 +34,37 @@ function exec(command) {
 function shell_quote(s) {
 	if (s == null || s == '') return "''";
 	return "'" + replace(s, "'", "'\\''") + "'";
+}
+
+// Get the LAN bridge device name dynamically
+function get_lan_device() {
+	// Try to get from UCI firewall config first
+	let lan_device = uci.get('firewall', '@zone[0]', 'network');
+	if (type(lan_device) == 'array') {
+		lan_device = lan_device[0];
+	}
+
+	// If we got a network name, resolve to device
+	if (lan_device) {
+		let device = uci.get('network', lan_device, 'device');
+		if (device) return device;
+
+		// Check for bridge ports
+		let ports = uci.get('network', lan_device, 'ports');
+		if (ports) return 'br-' + lan_device;
+	}
+
+	// Fallback: try common names
+	if (access('/sys/class/net/br-lan')) return 'br-lan';
+	if (access('/sys/class/net/br0')) return 'br0';
+
+	// Last resort: get first bridge device
+	let result = exec('brctl show 2>/dev/null | awk "NR>1 {print \\$1; exit}"');
+	if (result.code == 0 && length(result.stdout) > 0 && result.stdout[0] != '') {
+		return result.stdout[0];
+	}
+
+	return 'br-lan'; // Default fallback
 }
 
 const methods = {};
@@ -83,7 +117,10 @@ methods.get_status = {
 						rx: p?.RxBytes || ''
 					};
 				}
-			} catch (e) { /* ignore */ }
+			} catch (e) {
+				// Log error to system log for debugging
+				exec('logger -t tailscale "Error parsing status JSON: ' + shell_quote(e.message || 'unknown') + '"');
+			}
 		}
 
 		data.peers = peer_map;
@@ -96,6 +133,15 @@ methods.get_settings = {
 		let settings = {};
 		uci.load('tailscale');
 		let state_file_path = uci.get('tailscale', 'settings', 'state_file') || "/etc/tailscale/tailscaled.state";
+
+		// Get UCI settings
+		settings.service_enabled = uci.get('tailscale', 'settings', 'service_enabled') || '1';
+		settings.fw_mode = uci.get('tailscale', 'settings', 'fw_mode') || 'nftables';
+		settings.dns_mode = uci.get('tailscale', 'settings', 'dns_mode') || 'disabled';
+		settings.hostname = uci.get('tailscale', 'settings', 'hostname') || '';
+		settings.enable_relay = uci.get('tailscale', 'settings', 'enable_relay') || '0';
+		settings.relay_server_port = uci.get('tailscale', 'settings', 'relay_server_port') || '40000';
+
 		if (access(state_file_path)) {
 			try {
 				let state_content = readfile(state_file_path);
@@ -123,11 +169,12 @@ methods.get_settings = {
 					settings.ssh = status_data?.RunSSH || false;
 					settings.runwebclient = status_data?.RunWebClient || false;
 					settings.nosnat = status_data?.NoSNAT || false;
-					settings.dns_mode = uci.get('tailscale', 'settings', 'dns_mode') || 'disabled';
-					settings.fw_mode = split(uci.get('tailscale', 'settings', 'fw_mode'),' ')[0] || 'nftables';
 				}
 				}
-			} catch (e) { /* ignore */ }
+			} catch (e) {
+				// Log error to system log for debugging
+				exec('logger -t tailscale "Error reading settings: ' + shell_quote(e.message || 'unknown') + '"');
+			}
 		}
 		return settings;
 	}
@@ -167,20 +214,27 @@ methods.do_login = {
 		let max_attempts = 15;
 		let interval = 2000;
 
+		// Wait a bit for the login command to start
+		sleep(3000);
+
 		for (let i = 0; i < max_attempts; i++) {
 			let tresult = exec('tailscale status');
-			for (let line in tresult.stdout) {
-				let trline = trim(line);
-				if (index(trline, 'http') != -1) {
-					let parts = split(trline, ' ');
-					for (let part in parts) {
-						if (index(part, 'http') != -1) {
-							return { url: part };
+			if (tresult.code == 0) {
+				for (let line in tresult.stdout) {
+					let trline = trim(line);
+					if (index(trline, 'http') != -1) {
+						let parts = split(trline, ' ');
+						for (let part in parts) {
+							if (index(part, 'http') != -1) {
+								return { url: part };
+							}
 						}
 					}
 				}
 			}
-			sleep(interval);
+			// Increase interval after first few attempts
+			let current_interval = (i < 5) ? interval : interval * 2;
+			sleep(current_interval);
 		}
 		return { error: 'Could not retrieve login URL from tailscale command after 30 seconds.' };
 	}
@@ -260,12 +314,12 @@ methods.setup_firewall = {
 
 			uci.foreach('firewall', 'zone', function(s) {
 				if (s['name'] == 'tailscale')
-				ts_zone_section = s['.name'];
-				});
-				uci.foreach('firewall', 'forwarding', function(s) {
-					if (s['src'] == 'lan' && s['dest'] == 'tailscale') fwd_lan_to_ts = true;
-					if (s['src'] == 'tailscale' && s['dest'] == 'lan') fwd_ts_to_lan = true;
-				});
+					ts_zone_section = s['.name'];
+			});
+			uci.foreach('firewall', 'forwarding', function(s) {
+				if (s['src'] == 'lan' && s['dest'] == 'tailscale') fwd_lan_to_ts = true;
+				if (s['src'] == 'tailscale' && s['dest'] == 'lan') fwd_ts_to_lan = true;
+			});
 
 			if (ts_zone_section == null) {
 				let zid = uci.add('firewall', 'zone');
@@ -331,7 +385,59 @@ methods.setup_firewall = {
 				changed_firewall = true;
 			}
 
-			// 4. save
+			// 4. Add explicit masquerade rule for subnet routing (tailscale -> LAN)
+			// Zone-level masq '1' only applies to outgoing traffic (oifname direction)
+			// For traffic forwarded from tailscale to LAN, we need explicit SNAT
+			const firewall_user_path = '/etc/firewall.user';
+			let lan_device = get_lan_device();
+
+			// Determine firewall backend (nftables or iptables)
+			let fw_mode = uci.get('tailscale', 'settings', 'fw_mode') || 'nftables';
+			let masq_rule = '';
+
+			if (fw_mode === 'iptables') {
+				// iptables rule
+				masq_rule = 'iptables -t nat -A POSTROUTING -i tailscale0 -o ' + lan_device + ' -j MASQUERADE';
+			} else {
+				// nftables rule (default)
+				masq_rule = 'nft add rule inet fw4 srcnat iifname tailscale0 oifname ' + lan_device + ' meta nfproto ipv4 masquerade';
+			}
+
+			let needs_masq_rule = true;
+
+			// Check if rule already exists in firewall.user
+			if (access(firewall_user_path)) {
+				let content = readfile(firewall_user_path);
+				if (content && index(content, 'iifname tailscale0 oifname') != -1) {
+					needs_masq_rule = false;
+				}
+			}
+
+			if (needs_masq_rule) {
+				// Append rule to firewall.user
+				let existing_content = readfile(firewall_user_path) || '';
+				let new_content = rtrim(existing_content) + '\n' + masq_rule + '\n';
+				writefile(firewall_user_path, new_content);
+				// Apply the rule immediately
+				exec(masq_rule);
+			}
+
+			// 5. Enable IP forwarding for subnet routing and exit node
+			// Tailscale 1.96+ reports IP forwarding health warnings
+			exec('sysctl -w net.ipv4.ip_forward=1');
+			exec('sysctl -w net.ipv6.conf.all.forwarding=1');
+
+			// 6. Set src_valid_mark for reverse path filtering (Tailscale 1.96+)
+			// This prevents packets from being dropped by reverse path filtering
+			// when using connmark firewall rules
+			exec('sysctl -w net.ipv4.conf.all.src_valid_mark=1');
+
+			// Persist sysctl settings
+			let sysctl_conf_path = '/etc/sysctl.d/99-tailscale.conf';
+			let sysctl_content = 'net.ipv4.ip_forward=1\nnet.ipv6.conf.all.forwarding=1\nnet.ipv4.conf.all.src_valid_mark=1\n';
+			writefile(sysctl_conf_path, sysctl_content);
+
+			// 7. save
 			if (changed_network) {
 				uci.save('network');
 				uci.commit('network');

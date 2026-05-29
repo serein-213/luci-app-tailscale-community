@@ -25,7 +25,8 @@ const tailscaleSettingsConf = [
 	[form.Flag, 'shields_up', _('Shields Up'), _('When enabled, blocks all inbound connections from the Tailscale network.'), { rmempty: false }],
 	[form.Flag, 'ssh', _('Enable Tailscale SSH'), _('Allow connecting to this device through the SSH function of Tailscale.'), { rmempty: false }],
 	[form.ListValue, 'dns_mode', _('DNS Mode'), _('Controls how Tailscale DNS is handled.')+'<br>'+_('Disabled: system DNS only.')+'<br>'+_('MagicDNS: Tailscale overrides resolv.conf.')+'<br>'+_('OpenWrt Forward: MagicDNS via dnsmasq forwarding.(Only support ts.net)'), { values: [['disabled', _('Disabled')], ['magicdns', 'MagicDNS'], ['openwrt_forward', _('OpenWrt Forward')]], rmempty: false }],
-	[form.Flag, 'enable_relay', _('Enable Peer Relay'), _('Enable this device as a Peer Relay server. Requires a public IP and an UDP port open on the router.'), { rmempty: false }]
+	[form.Flag, 'enable_relay', _('Enable Peer Relay'), _('Enable this device as a Peer Relay server. Requires a public IP and an UDP port open on the router.'), { rmempty: false }],
+	[form.Value, 'hostname', _('Custom Hostname'), _('Set a custom hostname for this device on the Tailscale network. Leave blank to use the system hostname.'), { rmempty: true }]
 ];
 
 const accountConf = [];	// dynamic created in render function
@@ -323,6 +324,9 @@ return view.extend({
 					uci.set('tailscale', 'settings', 'runwebclient', ((settings_from_rpc.runwebclient || false) ? '1' : '0'));
 					uci.set('tailscale', 'settings', 'nosnat', ((settings_from_rpc.nosnat || false) ? '1' : '0'));
 					uci.set('tailscale', 'settings', 'dns_mode', 'disabled');
+					uci.set('tailscale', 'settings', 'hostname', '');
+					uci.set('tailscale', 'settings', 'enable_relay', '0');
+					uci.set('tailscale', 'settings', 'relay_server_port', '40000');
 
 					uci.set('tailscale', 'settings', 'daemon_reduce_memory', '0');
 					uci.set('tailscale', 'settings', 'daemon_mtu', '');
@@ -432,16 +436,20 @@ return view.extend({
 		fwBtn.inputstyle = 'action';
 		fwBtn.onclick = function() {
 			return callSetupFirewall().then(function(res) {
-			const msg = res?.message || _('Firewall configuration applied.');
-			ui.addNotification(null, E('p', {}, msg), 'info');
-		}).catch(function(err) {
-			ui.addNotification(null, E('p', {}, _('Failed to configure firewall: %s').format(err?.message || err || 'Unknown error')), 'error');
-		}).then(function() {
-			return new Promise(function(resolve) {
-				window.setTimeout(resolve, 3000);
+				if (res?.error) {
+					ui.addNotification(null, E('p', {}, _('Failed to configure firewall: %s').format(res.error)), 'error');
+				} else {
+					const msg = res?.message || _('Firewall configuration applied.');
+					ui.addNotification(null, E('p', {}, msg), 'info');
+				}
+			}).catch(function(err) {
+				ui.addNotification(null, E('p', {}, _('Failed to configure firewall: %s').format(err?.message || err || 'Unknown error')), 'error');
+			}).then(function() {
+				return new Promise(function(resolve) {
+					window.setTimeout(resolve, 3000);
+				});
 			});
-		});
-	};
+		};
 
 		const helpTitle = s.taboption('general', form.DummyValue, '_help_title');
 		helpTitle.title = _('How to enable Site-to-Site?');
