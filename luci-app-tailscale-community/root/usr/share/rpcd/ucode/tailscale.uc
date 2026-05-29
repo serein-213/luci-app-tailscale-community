@@ -405,19 +405,21 @@ methods.setup_firewall = {
 
 			let needs_masq_rule = true;
 
-			// Check if rule already exists in firewall.user
-			if (access(firewall_user_path)) {
-				let content = readfile(firewall_user_path);
-				if (content && index(content, 'iifname tailscale0 oifname') != -1) {
-					needs_masq_rule = false;
-				}
+			// Check if rule exists in nft ruleset (more reliable than checking file)
+			let check_cmd = fw_mode === 'iptables' 
+				? 'iptables -t nat -C POSTROUTING -i tailscale0 -o ' + lan_device + ' -j MASQUERADE 2>/dev/null'
+				: 'nft list chain inet fw4 srcnat 2>/dev/null | grep -q "iifname.*tailscale0.*oifname.*' + lan_device + '.*masquerade"';
+			let check_result = exec(check_cmd);
+			if (check_result.code == 0) {
+				needs_masq_rule = false;
 			}
 
 			if (needs_masq_rule) {
-				// Append rule to firewall.user
-				let existing_content = readfile(firewall_user_path) || '';
-				let new_content = rtrim(existing_content) + '\n' + masq_rule + '\n';
-				writefile(firewall_user_path, new_content);
+				// Ensure rule is in firewall.user for persistence
+				let firewall_user_content = access(firewall_user_path) ? readfile(firewall_user_path) || '' : '';
+				if (index(firewall_user_content, masq_rule) == -1) {
+					writefile(firewall_user_path, rtrim(firewall_user_content) + '\n' + masq_rule + '\n');
+				}
 				// Apply the rule immediately
 				exec(masq_rule);
 			}
