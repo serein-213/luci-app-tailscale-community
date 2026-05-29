@@ -12,6 +12,9 @@ const callDoLogin = rpc.declare({ object: 'tailscale', method: 'do_login', param
 const callDoLogout = rpc.declare({ object: 'tailscale', method: 'do_logout' });
 const callGetSubroutes = rpc.declare({ object: 'tailscale', method: 'get_subroutes' });
 const callSetupFirewall = rpc.declare({ object: 'tailscale', method: 'setup_firewall' });
+const callGetLogs = rpc.declare({ object: 'tailscale', method: 'get_logs', params: ['lines'] });
+const callPing = rpc.declare({ object: 'tailscale', method: 'ping', params: ['target'] });
+const callTraceroute = rpc.declare({ object: 'tailscale', method: 'traceroute', params: ['target'] });
 let map;
 
 const tailscaleSettingsConf = [
@@ -587,6 +590,67 @@ function renderTopology(status) {
 	return E('div', { 'style': 'position: relative;' }, [canvas, tooltip, legend]);
 }
 
+// Load logs function
+function loadLogs(container) {
+	container.textContent = _('Loading logs...');
+	callGetLogs(100).then(function(res) {
+		if (res && res.logs) {
+			container.textContent = res.logs.join('\n');
+			container.scrollTop = container.scrollHeight;
+		} else {
+			container.textContent = _('No logs available');
+		}
+	}).catch(function(err) {
+		container.textContent = _('Error loading logs: %s').format(err.message || err);
+	});
+}
+
+// Ping function
+function runPing() {
+	const target = document.getElementById('ping-target').value.trim();
+	if (!target) {
+		ui.addNotification(null, E('p', {}, _('Please enter a target IP or hostname')), 'warning');
+		return;
+	}
+	
+	const output = document.getElementById('ping-output');
+	output.style.display = 'block';
+	output.textContent = _('Pinging %s...').format(target);
+	
+	callPing(target).then(function(res) {
+		if (res && res.success) {
+			output.textContent = res.output.join('\n');
+		} else {
+			output.textContent = _('Ping failed: %s').format(res.error || 'Unknown error');
+		}
+	}).catch(function(err) {
+		output.textContent = _('Error: %s').format(err.message || err);
+	});
+}
+
+// Traceroute function
+function runTraceroute() {
+	const target = document.getElementById('traceroute-target').value.trim();
+	if (!target) {
+		ui.addNotification(null, E('p', {}, _('Please enter a target IP or hostname')), 'warning');
+		return;
+	}
+	
+	const output = document.getElementById('traceroute-output');
+	output.style.display = 'block';
+	output.textContent = _('Running traceroute to %s...').format(target);
+	
+	callTraceroute(target).then(function(res) {
+		if (res && res.success) {
+			output.textContent = res.output.join('\n');
+		} else {
+			output.textContent = _('Traceroute failed: %s').format(res.error || 'Unknown error');
+		}
+	}).catch(function(err) {
+		output.textContent = _('Error: %s').format(err.message || err);
+	});
+}
+
 return view.extend({
 	load() {
 		return Promise.all([
@@ -866,6 +930,110 @@ return view.extend({
 		const topologySection = s.taboption('topology', form.DummyValue, '_topology');
 		topologySection.render = function () {
 			return E('div', { 'id': 'tailscale_topology_display', 'class': 'cbi-value' }, renderTopology(status));
+		};
+
+		// Logs tab
+		s.tab('logs', _('Logs'));
+		const logsSection = s.taboption('logs', form.DummyValue, '_logs');
+		logsSection.render = function () {
+			const logContainer = E('div', { 'class': 'cbi-value' });
+			const logContent = E('pre', { 
+				'id': 'tailscale-logs',
+				'style': 'background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 6px; max-height: 500px; overflow-y: auto; font-size: 12px; font-family: monospace;'
+			}, _('Loading logs...'));
+			
+			const refreshBtn = E('button', {
+				'class': 'cbi-button',
+				'style': 'margin-top: 10px;',
+				'click': function() { loadLogs(logContent); }
+			}, _('Refresh Logs'));
+			
+			logContainer.appendChild(logContent);
+			logContainer.appendChild(refreshBtn);
+			loadLogs(logContent);
+			return logContainer;
+		};
+
+		// Tools tab
+		s.tab('tools', _('Network Tools'));
+		const toolsSection = s.taboption('tools', form.DummyValue, '_tools');
+		toolsSection.render = function () {
+			const toolsContainer = E('div', { 'class': 'cbi-value' });
+			
+			// Ping tool
+			const pingSection = E('div', { 'style': 'margin-bottom: 20px;' }, [
+				E('h3', { 'style': 'margin-bottom: 10px;' }, _('Ping Test')),
+				E('div', { 'style': 'display: flex; gap: 10px; align-items: center;' }, [
+					E('input', {
+						'id': 'ping-target',
+						'type': 'text',
+						'placeholder': _('Enter IP or hostname (e.g., 100.64.0.1)'),
+						'style': 'flex: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px;'
+					}),
+					E('button', {
+						'class': 'cbi-button cbi-button-action',
+						'click': function() { runPing(); }
+					}, _('Run Ping'))
+				]),
+				E('pre', {
+					'id': 'ping-output',
+					'style': 'background: #f5f5f5; padding: 10px; border-radius: 4px; margin-top: 10px; display: none; max-height: 200px; overflow-y: auto;'
+				})
+			]);
+			
+			// Traceroute tool
+			const tracerouteSection = E('div', { 'style': 'margin-bottom: 20px;' }, [
+				E('h3', { 'style': 'margin-bottom: 10px;' }, _('Traceroute')),
+				E('div', { 'style': 'display: flex; gap: 10px; align-items: center;' }, [
+					E('input', {
+						'id': 'traceroute-target',
+						'type': 'text',
+						'placeholder': _('Enter IP or hostname'),
+						'style': 'flex: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px;'
+					}),
+					E('button', {
+						'class': 'cbi-button cbi-button-action',
+						'click': function() { runTraceroute(); }
+					}, _('Run Traceroute'))
+				]),
+				E('pre', {
+					'id': 'traceroute-output',
+					'style': 'background: #f5f5f5; padding: 10px; border-radius: 4px; margin-top: 10px; display: none; max-height: 300px; overflow-y: auto;'
+				})
+			]);
+			
+			// Quick actions
+			const quickActions = E('div', {}, [
+				E('h3', { 'style': 'margin-bottom: 10px;' }, _('Quick Actions')),
+				E('div', { 'style': 'display: flex; gap: 10px; flex-wrap: wrap;' }, [
+					E('button', {
+						'class': 'cbi-button',
+						'click': function() { 
+							document.getElementById('ping-target').value = status.ipv4;
+							runPing();
+						}
+					}, _('Ping Self')),
+					E('button', {
+						'class': 'cbi-button',
+						'click': function() { 
+							document.getElementById('ping-target').value = '100.100.100.100';
+							runPing();
+						}
+					}, _('Ping Tailscale DNS')),
+					E('button', {
+						'class': 'cbi-button',
+						'click': function() { 
+							document.getElementById('ping-target').value = '8.8.8.8';
+							runPing();
+						}
+					}, _('Ping Google DNS'))
+				])
+			]);
+			
+			toolsContainer.appendChild(pingSection);
+			toolsContainer.appendChild(tracerouteSection);
+			toolsContainer.appendChild(quickActions);
+			return toolsContainer;
 		};
 
 		// Create the "Daemon Settings" tab and apply daemonConf

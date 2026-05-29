@@ -283,6 +283,47 @@ methods.get_subroutes = {
 	}
 };
 
+methods.get_logs = {
+	args: { lines: 50 },
+	call: function(request) {
+		let lines = request.args.lines || 50;
+		let result = exec('logread -e tailscale | tail -n ' + lines);
+		return { logs: result.stdout || [] };
+	}
+};
+
+methods.ping = {
+	args: { target: '' },
+	call: function(request) {
+		let target = request.args.target;
+		if (!target) {
+			return { error: 'Target is required' };
+		}
+		let result = exec('ping -c 3 -W 2 ' + shell_quote(target));
+		return { 
+			success: result.code == 0,
+			output: result.stdout || [],
+			error: result.code != 0 ? (result.stderr || 'Ping failed') : null
+		};
+	}
+};
+
+methods.traceroute = {
+	args: { target: '' },
+	call: function(request) {
+		let target = request.args.target;
+		if (!target) {
+			return { error: 'Target is required' };
+		}
+		let result = exec('traceroute -n -m 15 -w 2 ' + shell_quote(target));
+		return { 
+			success: result.code == 0,
+			output: result.stdout || [],
+			error: result.code != 0 ? (result.stderr || 'Traceroute failed') : null
+		};
+	}
+};
+
 methods.setup_firewall = {
 	call: function() {
 		try {
