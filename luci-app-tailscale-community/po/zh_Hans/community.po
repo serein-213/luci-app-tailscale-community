@@ -104,7 +104,7 @@ msgstr "无法打开新标签页。请检查您的浏览器或扩展程序是否
 
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:29
 msgid "Custom Hostname"
-msgstr ""
+msgstr "自定义主机名"
 
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:478
 msgid "Custom Login Server"
@@ -424,7 +424,7 @@ msgstr "服务状态"
 msgid ""
 "Set a custom hostname for this device on the Tailscale network. Leave blank "
 "to use the system hostname."
-msgstr ""
+msgstr "为此设备在 Tailscale 网络上设置自定义主机名。留空则使用系统主机名。"
 
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:25
 msgid "Shields Up"
