@@ -289,6 +289,14 @@ msgstr "剛才"
 msgid "LOGGED OUT"
 msgstr "已登出"
 
+#: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js
+msgid "Logs"
+msgstr "日誌"
+
+#: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js
+msgid "Network Tools"
+msgstr "網路工具"
+
 #: applications/luci-app-tailscale-community/htdocs/luci-static/resources/view/tailscale.js:310
 msgid "Direct Connection"
 msgstr "直接連線"
