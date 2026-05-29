@@ -195,7 +195,14 @@ function renderStatus(status) {
 	if (status.status == 'not_installed') {
 		return E('dl', { 'class': 'cbi-value' }, [
 			E('dt', {}, _('Service Status')),
-			E('dd', {}, E('span', { 'style': 'color:red;' }, E('strong', {}, _('TAILSCALE NOT FOUND'))))
+			E('dd', {}, [
+				E('span', { 'style': 'color:red;' }, E('strong', {}, _('TAILSCALE NOT FOUND'))),
+				E('br'),
+				E('span', {}, _('Tailscale is not installed. You can install it using one of the following methods:')),
+				E('br'),
+				E('pre', { 'style': 'background:#f6f8fa;padding:12px;border-radius:6px;margin-top:8px;font-size:13px;' }, 
+					'# Method 1: Install via opkg (OpenWrt official)\nopkg update && opkg install tailscale\n\n# Method 2: Install via opkg (Recommended, smaller size)\n# Add GuNanOvO repo first:\nwget https://GuNanOvO.github.io/openwrt-tailscale/key-build.pub -O /tmp/key-build.pub\nopkg-key add /tmp/key-build.pub\necho "src/gz tailscale https://GuNanOvO.github.io/openwrt-tailscale/packages/$(uname -m)" >> /etc/opkg/customfeeds.conf\nopkg update && opkg install tailscale\n\n# Method 3: Manual binary install\n# Download from https://pkgs.tailscale.com/stable/')
+			])
 		]);
 	}
 
