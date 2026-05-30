@@ -422,12 +422,15 @@ function renderTopology(status) {
 	const peerEntries = Object.entries(peers);
 	const nodeCount = peerEntries.length + 1;
 
-	// Canvas dimensions
+	// Canvas dimensions - dynamically adjust height for vertical breathing room
 	const width = 700;
-	const height = Math.max(400, Math.min(600, nodeCount * 50));
+	const height = Math.max(450, Math.min(800, nodeCount * 45));
 	const centerX = width / 2;
 	const centerY = height / 2;
-	const radius = Math.min(width, height) / 2 - 80;
+	
+	// Dynamic radius adapting to node density
+	const baseRadius = Math.min(width, height) / 2 - 85;
+	const radius = nodeCount <= 8 ? baseRadius : baseRadius + Math.min(130, (nodeCount - 8) * 7);
 
 	// OS icon mapping
 	const osIcons = {
@@ -484,9 +487,24 @@ function renderTopology(status) {
 		// Add peer nodes
 		const entries = Object.entries(peersData);
 		entries.forEach(([peerid, peer], index) => {
-			const angle = (2 * Math.PI * index) / entries.length - Math.PI / 2;
-			const x = centerX + radius * Math.cos(angle);
-			const y = centerY + radius * Math.sin(angle);
+			let currentRadius = radius;
+			let currentAngle = 0;
+
+			// Multi-tier layout for density reduction when nodes exceed 8
+			if (entries.length > 8) {
+				if (index < 6) {
+					currentRadius = radius * 0.55;
+					currentAngle = (2 * Math.PI * index) / 6 - Math.PI / 2;
+				} else {
+					currentRadius = radius * 1.05;
+					currentAngle = (2 * Math.PI * (index - 6)) / (entries.length - 6) - Math.PI / 2;
+				}
+			} else {
+				currentAngle = (2 * Math.PI * index) / entries.length - Math.PI / 2;
+			}
+
+			const x = centerX + currentRadius * Math.cos(currentAngle);
+			const y = centerY + currentRadius * Math.sin(currentAngle);
 
 			const isOnline = peer.online;
 			const isDirect = peer.linkadress && !String(peer.linkadress).includes('relay') && !String(peer.linkadress).includes('DERP');
@@ -654,6 +672,17 @@ function renderTopology(status) {
 		ctx.restore();
 	}
 
+	// requestAnimationFrame drawing throttle helper to prevent high CPU usage on low-end routers
+	let drawPending = false;
+	function scheduleDraw() {
+		if (drawPending) return;
+		drawPending = true;
+		window.requestAnimationFrame(function() {
+			drawPending = false;
+			draw();
+		});
+	}
+
 	// Get node at position (accounting for transform)
 	function getNodeAt(canvasX, canvasY) {
 		// Convert canvas coordinates to world coordinates
@@ -694,7 +723,7 @@ function renderTopology(status) {
 			E('strong', { 'style': 'font-size: 14px;' }, node.icon + ' ' + node.label),
 			E('button', {
 				'style': 'background: none; border: none; cursor: pointer; font-size: 16px; color: #999;',
-				'click': function() { updateDetailPanel(null); draw(); }
+				'click': function() { updateDetailPanel(null); scheduleDraw(); }
 			}, '×')
 		]));
 		detailPanel.appendChild(E('hr', { 'style': 'margin: 8px 0; border: none; border-top: 1px solid #eee;' }));
@@ -751,7 +780,7 @@ function renderTopology(status) {
 		transform.y = mouseY - (mouseY - transform.y) * (newScale / transform.scale);
 		transform.scale = newScale;
 
-		draw();
+		scheduleDraw();
 	});
 
 	canvas.addEventListener('mousedown', (e) => {
@@ -788,17 +817,17 @@ function renderTopology(status) {
 			const worldY = (y - transform.y) / transform.scale;
 			dragNode.x = Math.max(dragNode.r, Math.min(width - dragNode.r, worldX - dragOffsetX));
 			dragNode.y = Math.max(dragNode.r, Math.min(height - dragNode.r, worldY - dragOffsetY));
-			draw();
+			scheduleDraw();
 		} else if (isPanning) {
 			transform.x = x - panStartX;
 			transform.y = y - panStartY;
-			draw();
+			scheduleDraw();
 		} else {
 			const node = getNodeAt(x, y);
 			if (node !== hoveredNode) {
 				hoveredNode = node;
 				canvas.style.cursor = node ? (node.draggable ? 'grab' : 'pointer') : 'default';
-				draw();
+				scheduleDraw();
 			}
 
 			// Update tooltip
@@ -829,7 +858,7 @@ function renderTopology(status) {
 			const node = getNodeAt(x, y);
 			if (node) {
 				updateDetailPanel(node);
-				draw();
+				scheduleDraw();
 			}
 		}
 	});
@@ -839,11 +868,11 @@ function renderTopology(status) {
 		isPanning = false;
 		hoveredNode = null;
 		tooltip.style.display = 'none';
-		draw();
+		scheduleDraw();
 	});
 
 	// Initial draw
-	draw();
+	scheduleDraw();
 
 	// Real-time refresh every 10 seconds via L.Poll so the timer is
 	// automatically stopped when the user navigates away from this LuCI view.
@@ -861,7 +890,7 @@ function renderTopology(status) {
 					animationAlpha[peerid] = 0.3;
 					setTimeout(function() {
 						animationAlpha[peerid] = isOnline ? 1 : 0.6;
-						draw();
+						scheduleDraw();
 					}, 500);
 				}
 				prevOnlineState[peerid] = isOnline;
@@ -880,7 +909,7 @@ function renderTopology(status) {
 
 			nodes = newData.nodes;
 			links = newData.links;
-			draw();
+			scheduleDraw();
 		});
 	};
 	L.Poll.add(topologyPoll, 10);
@@ -907,7 +936,7 @@ function renderTopology(status) {
 			'style': 'font-size: 12px;',
 			'click': function() {
 				transform = { x: 0, y: 0, scale: 1 };
-				draw();
+				scheduleDraw();
 			}
 		}, _('Reset View')),
 		E('button', {
@@ -915,7 +944,7 @@ function renderTopology(status) {
 			'style': 'font-size: 12px;',
 			'click': function() {
 				transform.scale = Math.min(3, transform.scale * 1.2);
-				draw();
+				scheduleDraw();
 			}
 		}, _('Zoom In')),
 		E('button', {
@@ -923,7 +952,7 @@ function renderTopology(status) {
 			'style': 'font-size: 12px;',
 			'click': function() {
 				transform.scale = Math.max(0.5, transform.scale * 0.8);
-				draw();
+				scheduleDraw();
 			}
 		}, _('Zoom Out'))
 	]);
