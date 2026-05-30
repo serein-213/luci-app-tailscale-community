@@ -40,7 +40,46 @@ const daemonConf = [
 ];
 
 const derpMapUrl = 'https://controlplane.tailscale.com/derpmap/default';
-let regionCodeMap = {};
+// Inlined DERP region table. Used as the default so the UI works offline and
+// in restricted networks where controlplane.tailscale.com is unreachable.
+// Refreshed asynchronously from the network when available.
+const defaultRegionMap = {
+	'nyc': 'New York City',
+	'sfo': 'San Francisco',
+	'sea': 'Seattle',
+	'lax': 'Los Angeles',
+	'chi': 'Chicago',
+	'den': 'Denver',
+	'dfw': 'Dallas',
+	'mia': 'Miami',
+	'tor': 'Toronto',
+	'lhr': 'London',
+	'fra': 'Frankfurt',
+	'ams': 'Amsterdam',
+	'par': 'Paris',
+	'mad': 'Madrid',
+	'waw': 'Warsaw',
+	'sto': 'Stockholm',
+	'hel': 'Helsinki',
+	'dub': 'Dublin',
+	'ist': 'Istanbul',
+	'tyo': 'Tokyo',
+	'sin': 'Singapore',
+	'syd': 'Sydney',
+	'hkg': 'Hong Kong',
+	'sao': 'São Paulo',
+	'blr': 'Bangalore',
+	'jnb': 'Johannesburg',
+	'dxb': 'Dubai',
+	'nrt': 'Tokyo',
+	'icn': 'Seoul',
+	'bom': 'Mumbai'
+};
+let regionCodeMap = Object.assign({}, defaultRegionMap);
+// Kick off a single async refresh from the network on module load.
+// The inlined defaults remain available immediately and the merged result
+// (defaults + fetched) replaces regionCodeMap when the request resolves.
+initializeRegionMap();
 
 // this function copy from luci-app-frpc. thx
 function setParams(o, params) {
@@ -82,9 +121,9 @@ function getRunningStatus() {
 function formatBytes(bytes) {
 	const bytes_num = parseInt(bytes, 10);
 	if (isNaN(bytes_num) || bytes_num === 0) return '-';
-	const k = 1000;
-	const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-	const i = Math.floor(Math.log(bytes_num) / Math.log(k));
+	const k = 1024;
+	const sizes = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+	const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes_num) / Math.log(k)));
 	return parseFloat((bytes_num / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
@@ -115,44 +154,40 @@ async function initializeRegionMap() {
 		const cachedItem = localStorage.getItem(cacheKey);
 		if (cachedItem) {
 			const cached = JSON.parse(cachedItem);
-			// Check if the cached data is still valid (not expired)
 			if (Date.now() - cached.timestamp < ttl) {
-				regionCodeMap = cached.data;
+				regionCodeMap = Object.assign({}, defaultRegionMap, cached.data);
 				return;
 			}
 		}
 	} catch (e) {
-		ui.addTimeLimitedNotification(null, [ E('p', _('Error reading cached DERP region map: %s').format(e.message || _('Unknown error'))) ], 7000, 'error');
+		// Ignore cache errors and continue with the inlined defaults.
 	}
 
-	// If no valid cache, fetch from the network
+	// Try to refresh from the network in the background. Failures are silent
+	// because the inlined defaultRegionMap already provides reasonable coverage.
 	try {
 		const response = await fetch(derpMapUrl);
-		if (!response.ok) {
-			return;
-		}
+		if (!response.ok) return;
 		const data = await response.json();
 		const newRegionMap = {};
 		for (const regionId in data.Regions) {
 			const region = data.Regions[regionId];
 			const code = (region.RegionCode || '').toLowerCase();
 			const name = region.RegionName || region.RegionCode || `Region ${regionId}`;
-			newRegionMap[code] = name;
+			if (code) newRegionMap[code] = name;
 		}
-		regionCodeMap = newRegionMap;
+		regionCodeMap = Object.assign({}, defaultRegionMap, newRegionMap);
 
-		// Save the newly fetched data to the cache
 		try {
-			const itemToCache = {
+			localStorage.setItem(cacheKey, JSON.stringify({
 				timestamp: Date.now(),
-				data: regionCodeMap
-			};
-			localStorage.setItem(cacheKey, JSON.stringify(itemToCache));
+				data: newRegionMap
+			}));
 		} catch (e) {
-			ui.addTimeLimitedNotification(null, [ E('p', _('Error caching DERP region map: %s').format(e.message || _('Unknown error'))) ], 7000, 'error');
+			// localStorage may be unavailable (private mode, quota); ignore.
 		}
 	} catch (error) {
-		ui.addTimeLimitedNotification(null, [ E('p', _('Error fetching DERP region map: %s').format(error.message || _('Unknown error'))) ], 7000, 'error');
+		// Network unreachable — keep using defaultRegionMap silently.
 	}
 }
 
@@ -186,10 +221,6 @@ function renderStatus(status) {
 		try{
 			notificationElement.parentNode.parentNode.remove();
 		}catch(e){}
-	}
-
-	if (Object.keys(regionCodeMap).length === 0) {
-		initializeRegionMap();
 	}
 
 	// --- Part 1: Handle non-running states ---
@@ -257,10 +288,6 @@ function renderDevices(status) {
 
 	if (status.status != 'running') {
 		return E('em', {}, _('Tailscale status error'));
-	}
-
-	if (Object.keys(regionCodeMap).length === 0) {
-		initializeRegionMap();
 	}
 
 	const peers = status.peers;
@@ -362,7 +389,7 @@ function renderDevices(status) {
 						}, peer.online ? '●' : '○')
 					),
 					E('td', { 'class': 'cbi-value-field', 'style': td_style }, E('strong', {}, peer.hostname + (peer.exit_node_option ? ' (ExNode)' : ''))),
-					E('td', { 'class': 'cbi-value-field', 'style': td_style }, peer.ip || 'N/A'),
+					E('td', { 'class': 'cbi-value-field', 'style': td_style }, (Array.isArray(peer.ip) ? peer.ip.join(', ') : peer.ip) || 'N/A'),
 					E('td', { 'class': 'cbi-value-field', 'style': td_style }, peer.ostype || 'N/A'),
 					E('td', { 'class': 'cbi-value-field', 'style': td_style }, formatConnectionInfo(peer.linkadress || '-')),
 					E('td', { 'class': 'cbi-value-field', 'style': td_style }, formatBytes(peer.rx)),
@@ -487,7 +514,7 @@ function renderTopology(status) {
 				stroke: strokeColor,
 				icon: getOsIcon(peer.ostype),
 				label: (peer.hostname || 'Unknown').substring(0, 10),
-				ip: peer.ip ? String(peer.ip).split('<br')[0] : 'N/A',
+				ip: Array.isArray(peer.ip) ? (peer.ip[0] || 'N/A') : (peer.ip || 'N/A'),
 				isExit: peer.exit_node_option,
 				draggable: true,
 				alpha: isOnline ? 1 : 0.6,
@@ -818,45 +845,45 @@ function renderTopology(status) {
 	// Initial draw
 	draw();
 
-	// Real-time refresh every 10 seconds
-	let refreshTimer = setInterval(function() {
-		L.resolveDefault(callGetStatus(), {}).then(function(newStatus) {
-			if (newStatus && newStatus.status === 'running' && newStatus.peers) {
-				// Check for state changes and trigger animations
-				const newEntries = Object.entries(newStatus.peers);
-				newEntries.forEach(([peerid, peer]) => {
-					const wasOnline = prevOnlineState[peerid];
-					const isOnline = peer.online;
-					
-					if (wasOnline !== undefined && wasOnline !== isOnline) {
-						// State changed - trigger animation
-						animationAlpha[peerid] = 0.3;
-						setTimeout(function() {
-							animationAlpha[peerid] = isOnline ? 1 : 0.6;
-							draw();
-						}, 500);
-					}
-					prevOnlineState[peerid] = isOnline;
-				});
+	// Real-time refresh every 10 seconds via L.Poll so the timer is
+	// automatically stopped when the user navigates away from this LuCI view.
+	const topologyPoll = function() {
+		return L.resolveDefault(callGetStatus(), {}).then(function(newStatus) {
+			if (!newStatus || newStatus.status !== 'running' || !newStatus.peers) return;
 
-				// Rebuild graph data
-				const newData = buildGraphData(newStatus.peers);
-				
-				// Preserve node positions for existing nodes
-				newData.nodes.forEach(newNode => {
-					const existingNode = nodes.find(n => n.id === newNode.id);
-					if (existingNode) {
-						newNode.x = existingNode.x;
-						newNode.y = existingNode.y;
-					}
-				});
+			// Check for state changes and trigger animations
+			const newEntries = Object.entries(newStatus.peers);
+			newEntries.forEach(([peerid, peer]) => {
+				const wasOnline = prevOnlineState[peerid];
+				const isOnline = peer.online;
 
-				nodes = newData.nodes;
-				links = newData.links;
-				draw();
-			}
+				if (wasOnline !== undefined && wasOnline !== isOnline) {
+					animationAlpha[peerid] = 0.3;
+					setTimeout(function() {
+						animationAlpha[peerid] = isOnline ? 1 : 0.6;
+						draw();
+					}, 500);
+				}
+				prevOnlineState[peerid] = isOnline;
+			});
+
+			const newData = buildGraphData(newStatus.peers);
+
+			// Preserve node positions for existing nodes
+			newData.nodes.forEach(newNode => {
+				const existingNode = nodes.find(n => n.id === newNode.id);
+				if (existingNode) {
+					newNode.x = existingNode.x;
+					newNode.y = existingNode.y;
+				}
+			});
+
+			nodes = newData.nodes;
+			links = newData.links;
+			draw();
 		});
-	}, 10000);
+	};
+	L.Poll.add(topologyPoll, 10);
 
 	// Build legend
 	const legend = E('div', {
@@ -901,13 +928,7 @@ function renderTopology(status) {
 		}, _('Zoom Out'))
 	]);
 
-	// Cleanup on element removal
-	const container = E('div', { 'style': 'position: relative;' }, [toolbar, canvas, tooltip, detailPanel, legend]);
-	
-	// Store cleanup function
-	container._cleanupTimer = refreshTimer;
-	
-	return container;
+	return E('div', { 'style': 'position: relative;' }, [toolbar, canvas, tooltip, detailPanel, legend]);
 }
 
 // Load logs function
@@ -1073,7 +1094,8 @@ return view.extend({
 		if (status.peers) {
 			Object.values(status.peers).forEach(function(peer) {
 				if (peer.exit_node_option) {
-					const primaryIp = peer.ip.split('<br>')[0];
+					const primaryIp = Array.isArray(peer.ip) ? peer.ip[0] : peer.ip;
+					if (!primaryIp) return;
 					const label = peer.hostname ? `${peer.hostname} (${primaryIp})` : primaryIp;
 					en.value(primaryIp, label);
 				}
@@ -1084,7 +1106,8 @@ return view.extend({
 			if (status && status.status === 'running' && status.peers) {
 				for (const id in status.peers) {
 					if (status.peers[id].exit_node) {
-						return status.peers[id].ip.split('<br>')[0];
+						const ip = status.peers[id].ip;
+						return Array.isArray(ip) ? (ip[0] || '') : (ip || '');
 					}
 				}
 				return '';

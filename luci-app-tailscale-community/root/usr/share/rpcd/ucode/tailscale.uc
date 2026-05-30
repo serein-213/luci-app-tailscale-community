@@ -7,15 +7,12 @@ import { cursor } from 'uci';
 
 const uci = cursor();
 
-function exec(command, timeout) {
+function exec(command) {
 	let stdout_content = '';
 	let p = popen(command, 'r');
 	if (p == null) {
 		return { code: -1, stdout: [], stderr: `Failed to execute: ${command}` };
 	}
-
-	// Wait a bit for command to start
-	sleep(timeout || 100);
 
 	for (let line = p.read('line'); length(line); line = p.read('line')) {
 		stdout_content = stdout_content + line;
@@ -58,10 +55,16 @@ function get_lan_device() {
 	if (access('/sys/class/net/br-lan')) return 'br-lan';
 	if (access('/sys/class/net/br0')) return 'br0';
 
-	// Last resort: get first bridge device
-	let result = exec('brctl show 2>/dev/null | awk "NR>1 {print \\$1; exit}"');
-	if (result.code == 0 && length(result.stdout) > 0 && result.stdout[0] != '') {
-		return result.stdout[0];
+	// Last resort: scan /sys/class/net/ for any bridge device.
+	// brctl is no longer installed by default on DSA-based OpenWrt.
+	let result = exec('ls /sys/class/net/ 2>/dev/null');
+	if (result.code == 0) {
+		for (let dev in result.stdout) {
+			if (dev && (substr(dev, 0, 3) == 'br-' || substr(dev, 0, 2) == 'br') &&
+				access('/sys/class/net/' + dev + '/bridge')) {
+				return dev;
+			}
+		}
 	}
 
 	return 'br-lan'; // Default fallback
@@ -105,7 +108,7 @@ methods.get_status = {
 				for (let p in status_data?.Peer) {
 					p = status_data.Peer[p];
 					peer_map[p.ID] = {
-						ip: join('<br>', p?.TailscaleIPs) || '',
+						ip: p?.TailscaleIPs || [],
 						hostname: split(p?.DNSName || '','.')[0] || '',
 						ostype: p?.OS,
 						online: p?.Online,
@@ -145,31 +148,45 @@ methods.get_settings = {
 		if (access(state_file_path)) {
 			try {
 				let state_content = readfile(state_file_path);
-				if (state_content != null) {
+				if (state_content != null && length(state_content) > 0) {
 					let state_data = json(state_content);
-					let profiles_b64 = state_data?._profiles;
-					if (!profiles_b64) return settings;
-
-					let profiles_data = json(b64dec(profiles_b64));
-					let profiles_key = null;
-					for (let key in profiles_data) {
-						profiles_key = key;
-						break;
+					if (type(state_data) == 'object') {
+						let profiles_b64 = state_data?._profiles;
+						if (profiles_b64 && type(profiles_b64) == 'string') {
+							let decoded_profiles = b64dec(profiles_b64);
+							if (decoded_profiles != null) {
+								let profiles_data = json(decoded_profiles);
+								let profiles_key = null;
+								if (type(profiles_data) == 'object') {
+									for (let key in profiles_data) {
+										profiles_key = key;
+										break;
+									}
+								}
+								if (profiles_key != null) {
+									profiles_key = 'profile-' + profiles_key;
+									let profile_b64 = state_data?.[profiles_key];
+									if (profile_b64 && type(profile_b64) == 'string') {
+										let decoded_profile = b64dec(profile_b64);
+										if (decoded_profile != null) {
+											let status_data = json(decoded_profile);
+											if (status_data != null) {
+												settings.accept_routes = status_data?.RouteAll || false;
+												settings.advertise_exit_node = status_data?.AdvertiseExitNode || false;
+												settings.advertise_routes = status_data?.AdvertiseRoutes || [];
+												settings.exit_node = status_data?.ExitNodeID || "";
+												settings.exit_node_allow_lan_access = status_data?.ExitNodeAllowLANAccess || false;
+												settings.shields_up = status_data?.ShieldsUp || false;
+												settings.ssh = status_data?.RunSSH || false;
+												settings.runwebclient = status_data?.RunWebClient || false;
+												settings.nosnat = status_data?.NoSNAT || false;
+											}
+										}
+									}
+								}
+							}
+						}
 					}
-				profiles_key = 'profile-'+profiles_key;
-
-				let status_data = json(b64dec(state_data?.[profiles_key]));
-				if (status_data != null) {
-					settings.accept_routes = status_data?.RouteAll || false;
-					settings.advertise_exit_node = status_data?.AdvertiseExitNode || false;
-					settings.advertise_routes = status_data?.AdvertiseRoutes || [];
-					settings.exit_node = status_data?.ExitNodeID || "";
-					settings.exit_node_allow_lan_access = status_data?.ExitNodeAllowLANAccess || false;
-					settings.shields_up = status_data?.ShieldsUp || false;
-					settings.ssh = status_data?.RunSSH || false;
-					settings.runwebclient = status_data?.RunWebClient || false;
-					settings.nosnat = status_data?.NoSNAT || false;
-				}
 				}
 			} catch (e) {
 				// Log error to system log for debugging
@@ -185,7 +202,6 @@ methods.do_login = {
 	args: { form_data: {} },
 	call: function(request) {
 		const form_data = request.args.form_data;
-		let loginargs = [];
 		if (form_data == null || length(form_data) == 0) {
 			return { error: 'Missing or invalid form_data parameter. Please provide login data.' };
 		}
@@ -199,16 +215,18 @@ methods.do_login = {
 		const loginserver = trim(form_data.loginserver) || '';
 		const loginserver_authkey = trim(form_data.loginserver_authkey) || '';
 
-		if (loginserver!='') {
-			push(loginargs,'--login-server '+shell_quote(loginserver));
-			if (loginserver_authkey!='') {
-				push(loginargs,'--auth-key '+shell_quote(loginserver_authkey));
+		let loginargs_str = '';
+		if (loginserver != '') {
+			loginargs_str = ' --login-server ' + shell_quote(loginserver);
+			if (loginserver_authkey != '') {
+				loginargs_str = loginargs_str + ' --auth-key ' + shell_quote(loginserver_authkey);
 			}
 		}
 
-		// Run the command in the background using /bin/sh -c to handle the '&' correctly
-		let login_cmd = 'tailscale login '+join(' ', loginargs);
-		popen('/bin/sh -c "' + login_cmd + ' &"', 'r');
+		// Run in the background. Single-layer shell wrap so single-quote escaping
+		// from shell_quote() remains effective. Detach stdio to keep popen from blocking.
+		let login_cmd = 'tailscale login' + loginargs_str + ' </dev/null >/dev/null 2>&1 &';
+		popen(login_cmd, 'r');
 
 		// --- 2. Loop to Check Status for URL ---
 		let max_attempts = 15;
@@ -437,33 +455,36 @@ methods.setup_firewall = {
 			let masq_rule = '';
 
 			if (fw_mode === 'iptables') {
-				// iptables rule
 				masq_rule = 'iptables -t nat -A POSTROUTING -i tailscale0 -o ' + lan_device + ' -j MASQUERADE';
 			} else {
-				// nftables rule (default)
 				masq_rule = 'nft add rule inet fw4 srcnat iifname tailscale0 oifname ' + lan_device + ' meta nfproto ipv4 masquerade';
 			}
 
-			let needs_masq_rule = true;
-
-			// Check if rule exists in nft ruleset (more reliable than checking file)
-			let check_cmd = fw_mode === 'iptables' 
+			// Apply rule immediately if missing
+			let check_cmd = fw_mode === 'iptables'
 				? 'iptables -t nat -C POSTROUTING -i tailscale0 -o ' + lan_device + ' -j MASQUERADE 2>/dev/null'
 				: 'nft list chain inet fw4 srcnat 2>/dev/null | grep -q "iifname.*tailscale0.*oifname.*' + lan_device + '.*masquerade"';
 			let check_result = exec(check_cmd);
-			if (check_result.code == 0) {
-				needs_masq_rule = false;
-			}
-
-			if (needs_masq_rule) {
-				// Ensure rule is in firewall.user for persistence
-				let firewall_user_content = access(firewall_user_path) ? readfile(firewall_user_path) || '' : '';
-				if (index(firewall_user_content, masq_rule) == -1) {
-					writefile(firewall_user_path, rtrim(firewall_user_content) + '\n' + masq_rule + '\n');
-				}
-				// Apply the rule immediately
+			if (check_result.code != 0) {
 				exec(masq_rule);
 			}
+
+			// Persist: rewrite firewall.user idempotently. Strip any existing
+			// tailscale0 masquerade lines (handles lan_device renames and stale entries),
+			// then append the current rule.
+			let existing = access(firewall_user_path) ? readfile(firewall_user_path) || '' : '';
+			let kept_lines = [];
+			for (let line in split(existing, '\n')) {
+				if (index(line, 'tailscale0') != -1 &&
+					(index(line, 'masquerade') != -1 || index(line, 'MASQUERADE') != -1)) {
+					continue;
+				}
+				push(kept_lines, line);
+			}
+			let new_content = rtrim(join('\n', kept_lines));
+			if (new_content != '') new_content += '\n';
+			new_content += masq_rule + '\n';
+			writefile(firewall_user_path, new_content);
 
 			// 5. Enable IP forwarding for subnet routing and exit node
 			// Tailscale 1.96+ reports IP forwarding health warnings

@@ -7,7 +7,9 @@
 					"get_status",
 					"get_settings",
 					"get_subroutes",
-					"get_logs"
+					"get_logs",
+					"ping",
+					"traceroute"
 				]
 			},
 			"uci": [ "tailscale" ]
@@ -17,9 +19,7 @@
 				"tailscale": [
 					"do_login",
 					"do_logout",
-					"setup_firewall",
-					"ping",
-					"traceroute"
+					"setup_firewall"
 				]
 			},
 			"uci": [ "tailscale" ]
