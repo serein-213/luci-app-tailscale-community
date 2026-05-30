@@ -268,46 +268,116 @@ function renderDevices(status) {
 		return E('p', {}, _('No peer devices found.'));
 	}
 
+	// Sort state
+	let sortField = 'hostname';
+	let sortAsc = true;
+
 	const peerTableHeaders = [
-		{ text: _('Status'), style: 'width: 80px;' },
-		{ text: _('Hostname') },
-		{ text: _('Tailscale IP') },
-		{ text: _('OS') },
-		{ text: _('Connection Info') },
-		{ text: _('RX') },
-		{ text: _('TX') },
-		{ text: _('Last Seen') }
+		{ text: _('Status'), field: 'status', style: 'width: 80px;' },
+		{ text: _('Hostname'), field: 'hostname' },
+		{ text: _('Tailscale IP'), field: 'ip' },
+		{ text: _('OS'), field: 'ostype' },
+		{ text: _('Connection Info'), field: 'linkadress' },
+		{ text: _('RX'), field: 'rx' },
+		{ text: _('TX'), field: 'tx' },
+		{ text: _('Last Seen'), field: 'lastseen' }
 	];
 
-	return E('table', { 'class': 'cbi-table' }, [
-		E('tr', { 'class': 'cbi-table-header' }, peerTableHeaders.map(header => {
-			let th_style = 'padding-right: 20px; text-align: left;';
-			if (header.style) {
-				th_style += header.style;
+	// Container for the table
+	const container = E('div');
+
+	function getSortedPeers() {
+		let entries = Object.entries(peers);
+		entries.sort(([, a], [, b]) => {
+			let valA, valB;
+			switch (sortField) {
+				case 'status':
+					valA = a.online ? 1 : 0;
+					valB = b.online ? 1 : 0;
+					break;
+				case 'hostname':
+					valA = (a.hostname || '').toLowerCase();
+					valB = (b.hostname || '').toLowerCase();
+					return sortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+				case 'ip':
+					valA = a.ip || '';
+					valB = b.ip || '';
+					return sortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+				case 'ostype':
+					valA = (a.ostype || '').toLowerCase();
+					valB = (b.ostype || '').toLowerCase();
+					return sortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+				case 'rx':
+				case 'tx':
+					valA = parseInt(a[sortField]) || 0;
+					valB = parseInt(b[sortField]) || 0;
+					break;
+				case 'lastseen':
+					valA = a.lastseen || '';
+					valB = b.lastseen || '';
+					return sortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+				default:
+					valA = 0;
+					valB = 0;
 			}
-			return E('th', { 'class': 'cbi-table-cell', 'style': th_style }, header.text);
-		})),
+			return sortAsc ? valA - valB : valB - valA;
+		});
+		return entries;
+	}
 
-		...Object.entries(peers).map(([peerid, peer]) => {
-			const td_style = 'padding-right: 20px;';
+	function renderTable() {
+		const sortedPeers = getSortedPeers();
 
-			return E('tr', { 'class': 'cbi-rowstyle-1' }, [
-				E('td', { 'class': 'cbi-value-field', 'style': td_style },
-					E('span', {
-						'style': `color:${peer.exit_node ? 'blue' : (peer.online ? 'green' : 'gray')};`,
-						'title': (peer.exit_node ? _('Exit Node') + ' ' : '') + (peer.online ? _('Online') : _('Offline'))
-					}, peer.online ? '●' : '○')
-				),
-				E('td', { 'class': 'cbi-value-field', 'style': td_style }, E('strong', {}, peer.hostname + (peer.exit_node_option ? ' (ExNode)' : ''))),
-				E('td', { 'class': 'cbi-value-field', 'style': td_style }, peer.ip || 'N/A'),
-				E('td', { 'class': 'cbi-value-field', 'style': td_style }, peer.ostype || 'N/A'),
-				E('td', { 'class': 'cbi-value-field', 'style': td_style }, formatConnectionInfo(peer.linkadress || '-')),
-				E('td', { 'class': 'cbi-value-field', 'style': td_style }, formatBytes(peer.rx)),
-				E('td', { 'class': 'cbi-value-field', 'style': td_style }, formatBytes(peer.tx)),
-				E('td', { 'class': 'cbi-value-field', 'style': td_style }, formatLastSeen(peer.lastseen))
-			]);
-		})
-	]);
+		const table = E('table', { 'class': 'cbi-table' }, [
+			E('tr', { 'class': 'cbi-table-header' }, peerTableHeaders.map(header => {
+				let th_style = 'padding-right: 20px; text-align: left; cursor: pointer; user-select: none;';
+				if (header.style) {
+					th_style += header.style;
+				}
+				const isSorted = sortField === header.field;
+				const arrow = isSorted ? (sortAsc ? ' ▲' : ' ▼') : '';
+				return E('th', {
+					'class': 'cbi-table-cell',
+					'style': th_style,
+					'click': function() {
+						if (sortField === header.field) {
+							sortAsc = !sortAsc;
+						} else {
+							sortField = header.field;
+							sortAsc = true;
+						}
+						renderTable();
+					}
+				}, header.text + arrow);
+			})),
+
+			...sortedPeers.map(([peerid, peer]) => {
+				const td_style = 'padding-right: 20px;';
+
+				return E('tr', { 'class': 'cbi-rowstyle-1' }, [
+					E('td', { 'class': 'cbi-value-field', 'style': td_style },
+						E('span', {
+							'style': `color:${peer.exit_node ? 'blue' : (peer.online ? 'green' : 'gray')};`,
+							'title': (peer.exit_node ? _('Exit Node') + ' ' : '') + (peer.online ? _('Online') : _('Offline'))
+						}, peer.online ? '●' : '○')
+					),
+					E('td', { 'class': 'cbi-value-field', 'style': td_style }, E('strong', {}, peer.hostname + (peer.exit_node_option ? ' (ExNode)' : ''))),
+					E('td', { 'class': 'cbi-value-field', 'style': td_style }, peer.ip || 'N/A'),
+					E('td', { 'class': 'cbi-value-field', 'style': td_style }, peer.ostype || 'N/A'),
+					E('td', { 'class': 'cbi-value-field', 'style': td_style }, formatConnectionInfo(peer.linkadress || '-')),
+					E('td', { 'class': 'cbi-value-field', 'style': td_style }, formatBytes(peer.rx)),
+					E('td', { 'class': 'cbi-value-field', 'style': td_style }, formatBytes(peer.tx)),
+					E('td', { 'class': 'cbi-value-field', 'style': td_style }, formatLastSeen(peer.lastseen))
+				]);
+			})
+		]);
+
+		container.textContent = '';
+		container.appendChild(table);
+	}
+
+	renderTable();
+	return container;
 }
 
 // Render network topology diagram
@@ -451,12 +521,14 @@ function renderTopology(status) {
 
 	// Tooltip element
 	const tooltip = E('div', {
+		'class': 'topology-tooltip',
 		'style': 'position: absolute; display: none; background: rgba(0,0,0,0.8); color: white; padding: 8px 12px; border-radius: 4px; font-size: 12px; pointer-events: none; z-index: 1000;'
 	});
 
 	// Detail panel element
 	const detailPanel = E('div', {
-		'style': 'position: absolute; right: 10px; top: 10px; width: 250px; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 1001; font-size: 13px;'
+		'class': 'cbi-section',
+		'style': 'position: absolute; right: 10px; top: 10px; width: 250px; display: none; z-index: 1001; font-size: 13px;'
 	});
 
 	// State for dragging
@@ -788,7 +860,8 @@ function renderTopology(status) {
 
 	// Build legend
 	const legend = E('div', {
-		'style': 'margin-top: 15px; padding: 10px; background: #f5f5f5; border-radius: 5px; font-size: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;'
+		'class': 'cbi-section',
+		'style': 'margin-top: 15px; padding: 10px; font-size: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;'
 	}, [
 		E('strong', {}, _('Legend') + ':'),
 		E('span', { 'style': 'margin-left: 5px;' }, '🟢 ' + _('Direct Connection')),
