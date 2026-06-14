@@ -1,10 +1,47 @@
 #!/bin/sh /etc/rc.common
 
 USE_PROCD=1
-START=99
+START=70
 STOP=10
 
 NAME=tailscale-settings
+
+# Ensure Tailscale state file survives reboot on OpenWrt.
+# /var is tmpfs, so /var/lib/tailscale/ is lost on reboot.
+# We persist state under /etc/tailscale/ and symlink /var/lib/tailscale -> /etc/tailscale/.
+ensure_state_persistence() {
+	local state_dir="/etc/tailscale"
+	local var_dir="/var/lib/tailscale"
+	local state_file="$state_dir/tailscaled.state"
+
+	mkdir -p "$state_dir"
+
+	# If /var/lib/tailscale is already a symlink to our target, nothing to do
+	if [ -L "$var_dir" ] && [ "$(readlink "$var_dir")" = "$state_dir" ]; then
+		return 0
+	fi
+
+	# If /var/lib/tailscale exists as a real directory (first boot after install,
+	# or tailscaled already started), migrate any state file before replacing
+	if [ -d "$var_dir" ] && [ ! -L "$var_dir" ]; then
+		# Copy state file if it exists in var and not yet in etc
+		if [ -f "$var_dir/tailscaled.state" ] && [ ! -f "$state_file" ]; then
+			cp "$var_dir/tailscaled.state" "$state_file"
+			logger -t "$NAME" "Migrated tailscaled.state from /var/lib/tailscale/ to /etc/tailscale/"
+		fi
+		# Also copy any other files (keys, socket configs) that tailscaled may write
+		for f in "$var_dir"/*; do
+			if [ -f "$f" ] && [ ! -f "$state_dir/${f##*/}" ]; then
+				cp "$f" "$state_dir/${f##*/}"
+			fi
+		done
+		rm -rf "$var_dir"
+	fi
+
+	# Create the symlink
+	ln -sf "$state_dir" "$var_dir"
+	logger -t "$NAME" "State persistence configured: /var/lib/tailscale -> /etc/tailscale/"
+}
 
 # Compare version strings: return 0 (true) if $1 >= $2
 version_gte() {
@@ -203,6 +240,8 @@ apply_settings() {
 }
 
 handle_service_state() {
+	ensure_state_persistence
+
 	config_load tailscale
 	local service_enabled
 	config_get service_enabled settings service_enabled '1'
@@ -221,6 +260,7 @@ handle_service_state() {
 }
 
 start_service() {
+	ensure_state_persistence
 	apply_settings
 }
 
